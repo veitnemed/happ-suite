@@ -4,6 +4,7 @@ Loads default.json, merges with user overrides, auto-discovers component paths.
 """
 import json
 import os
+import sys
 import glob
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -48,9 +49,6 @@ class Config:
     def __init__(self, config_path: Optional[str] = None):
         self._data: Dict[str, Any] = {}
         self._config_path = config_path
-
-import sys
-
         # Determine base directory (handles PyInstaller bundle)
         base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         default_path = os.path.join(base_dir, "config", "default.json")
