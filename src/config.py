@@ -49,11 +49,40 @@ class Config:
         self._data: Dict[str, Any] = {}
         self._config_path = config_path
 
-        # Load defaults
-        default_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "default.json")
+import sys
+
+        # Determine base directory (handles PyInstaller bundle)
+        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        default_path = os.path.join(base_dir, "config", "default.json")
+        if not os.path.exists(default_path):
+            exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else base_dir
+            default_path = os.path.join(exe_dir, "config", "default.json")
+
         if os.path.exists(default_path):
             with open(default_path, "r", encoding="utf-8") as f:
                 self._data = json.load(f)
+        else:
+            self._data = {
+                "happ_exe": r"C:\Program Files\FlyFrogLLC\Happ\Happ.exe",
+                "proxy_port": 10809,
+                "proxy_url": "http://127.0.0.1:10809",
+                "registry_pref": r"HKCU\Software\Happ\OrganizationDefaults\Preferences",
+                "servers": [
+                    {"id": 264383027, "label": "[DE] Германия #2", "name": "Германия #2", "country": "DE", "category": "foreign", "host": "167.233.117.249", "port": 443},
+                    {"id": 1322034547, "label": "[DE] Германия", "name": "Германия", "country": "DE", "category": "foreign", "host": "138.199.170.143", "port": 443},
+                    {"id": 2200331173, "label": "[FI] Финляндия [GRPC]", "name": "Финляндия ⚡️ [GRPC]", "country": "FI", "category": "foreign", "host": "135.181.211.216", "port": 443},
+                    {"id": 3478276439, "label": "[RU] Россия (Антизаглушка)", "name": "Россия | YouTube без рекламы", "country": "RU", "category": "domestic", "host": "5.129.194.228", "port": 443}
+                ],
+                "health_check_interval_sec": 30,
+                "tunnel_wait_timeout_sec": 45,
+                "auto_reconnect_after_sleep": True,
+                "check_urls": {
+                    "youtube": "https://www.youtube.com",
+                    "chatgpt": "https://chatgpt.com",
+                    "gemini": "https://gemini.google.com",
+                    "runet": "https://ya.ru"
+                }
+            }
 
         # Load user overrides
         if config_path and os.path.exists(config_path):

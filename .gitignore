@@ -45,6 +45,7 @@ config.json
 # Old PowerShell scripts (migrated to Python)
 *.ps1
 *.bat
+!run.bat
 !scripts/*.bat
 
 # Python cache
