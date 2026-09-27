@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# PyInstaller
+*.spec
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# External components (downloaded separately)
+components/zapret/
+components/happ/
+components/ag_unlocker/
+Happ_Antigravity_Suite/
+zapret-discord-youtube*/
+*.exe
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+config.json
+
+# Old PowerShell scripts (migrated to Python)
+*.ps1
+*.bat
+!scripts/*.bat
+
+# Python cache
+fix_ps1.py
+rewrite.py
+happ_helper.py

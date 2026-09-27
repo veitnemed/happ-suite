@@ -1,0 +1,62 @@
+{
+    "happ_exe": "C:\\Program Files\\FlyFrogLLC\\Happ\\Happ.exe",
+    "proxy_port": 10809,
+    "proxy_url": "http://127.0.0.1:10809",
+
+    "zapret_dir": null,
+    "zapret_strategy": "general.bat",
+
+    "ag_dns_path": null,
+
+    "registry_pref": "HKCU\\Software\\Happ\\OrganizationDefaults\\Preferences",
+
+    "servers": [
+        {
+            "id": 264383027,
+            "label": "[DE] Германия #2",
+            "name": "Германия #2",
+            "country": "DE",
+            "category": "foreign",
+            "host": "167.233.117.249",
+            "port": 443
+        },
+        {
+            "id": 1322034547,
+            "label": "[DE] Германия",
+            "name": "Германия",
+            "country": "DE",
+            "category": "foreign",
+            "host": "138.199.170.143",
+            "port": 443
+        },
+        {
+            "id": 2200331173,
+            "label": "[FI] Финляндия [GRPC]",
+            "name": "Финляндия ⚡️ [GRPC]",
+            "country": "FI",
+            "category": "foreign",
+            "host": "135.181.211.216",
+            "port": 443
+        },
+        {
+            "id": 3478276439,
+            "label": "[RU] Россия (Антизаглушка)",
+            "name": "Россия | YouTube без рекламы",
+            "country": "RU",
+            "category": "domestic",
+            "host": "5.129.194.228",
+            "port": 443
+        }
+    ],
+
+    "health_check_interval_sec": 30,
+    "tunnel_wait_timeout_sec": 45,
+    "auto_reconnect_after_sleep": true,
+
+    "check_urls": {
+        "youtube": "https://www.youtube.com",
+        "chatgpt": "https://chatgpt.com",
+        "gemini": "https://gemini.google.com",
+        "runet": "https://ya.ru"
+    }
+}
