@@ -1,45 +1,87 @@
-"""
-Build script to compile Happ Suite into a single standalone executable using PyInstaller.
-"""
-import os
+"""Build a windowless Happ Suite directory with an external default config."""
+
+import argparse
+import json
+from pathlib import Path
+import shutil
 import subprocess
 import sys
 
-def build():
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    main_py = os.path.join(root_dir, "src", "main.py")
-    config_dir = os.path.join(root_dir, "config")
-    dist_dir = os.path.join(root_dir, "dist")
-    build_dir = os.path.join(root_dir, "build")
+
+PRIVATE_CONFIG_FIELDS = {
+    "ag_unlocker_key",
+    "api_key",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+}
+
+
+def _check_public_config(value):
+    """Keep credentials out of the distributable default configuration."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key.casefold() in PRIVATE_CONFIG_FIELDS:
+                raise ValueError(f"config/default.json contains private field: {key}")
+            _check_public_config(item)
+    elif isinstance(value, list):
+        for item in value:
+            _check_public_config(item)
+
+
+def build(dist_dir=None, work_dir=None):
+    root_dir = Path(__file__).resolve().parent.parent
+    main_py = root_dir / "src" / "main.py"
+    default_config = root_dir / "config" / "default.json"
+    dist_dir = Path(dist_dir).resolve() if dist_dir else root_dir / "dist"
+    work_dir = Path(work_dir).resolve() if work_dir else root_dir / "build" / "onedir"
+
+    with default_config.open("r", encoding="utf-8") as source:
+        _check_public_config(json.load(source))
 
     cmd = [
         sys.executable,
         "-m", "PyInstaller",
         "--name=HappSuite",
-        "--onefile",
+        "--onedir",
         "--noconsole",
         "--clean",
-        f"--add-data={config_dir};config",
+        "--noconfirm",
+        f"--paths={root_dir / 'src'}",
         f"--distpath={dist_dir}",
-        f"--workpath={build_dir}",
+        f"--workpath={work_dir}",
+        f"--specpath={work_dir}",
         "--hidden-import=pystray",
         "--hidden-import=PIL",
         "--hidden-import=psutil",
         "--hidden-import=requests",
-        main_py
+        str(main_py),
     ]
 
     print("Running PyInstaller build:")
     print(" ".join(cmd))
-    result = subprocess.run(cmd, cwd=root_dir)
-    if result.returncode == 0:
-        exe_path = os.path.join(dist_dir, "HappSuite.exe")
-        print("\n" + "=" * 60)
-        print(f"BUILD SUCCESSFUL: {exe_path}")
-        print("=" * 60)
-    else:
-        print(f"\nBUILD FAILED with exit code {result.returncode}")
-        sys.exit(result.returncode)
+    subprocess.run(cmd, cwd=root_dir, check=True)
+
+    package_dir = dist_dir / "HappSuite"
+    exe_path = package_dir / "HappSuite.exe"
+    if not exe_path.is_file():
+        raise FileNotFoundError(f"PyInstaller did not create {exe_path}")
+
+    package_config = package_dir / "config" / "default.json"
+    package_config.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(default_config, package_config)
+
+    print("\n" + "=" * 60)
+    print(f"BUILD SUCCESSFUL: {exe_path}")
+    print(f"CONFIG: {package_config}")
+    print("=" * 60)
+    return exe_path
+
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dist-dir", type=Path, help="PyInstaller output directory")
+    parser.add_argument("--work-dir", type=Path, help="isolated PyInstaller work directory")
+    args = parser.parse_args()
+    build(args.dist_dir, args.work_dir)

@@ -8,8 +8,12 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from .core import tcp_ping
-from .config import Config
+try:
+    from .core import tcp_ping, _reg_get_value
+    from .app_config import Config
+except (ImportError, ValueError):
+    from core import tcp_ping, _reg_get_value
+    from app_config import Config
 
 logger = logging.getLogger("happ_suite.server_picker")
 
@@ -94,7 +98,6 @@ def pick_best_server(results: List[PingResult]) -> Optional[Dict]:
 
 def get_current_server_id(config: Config) -> Optional[int]:
     """Read the current server ID from Windows registry."""
-    from .core import _reg_get_value
     return _reg_get_value(config.registry_pref, "lastServer")
 
 

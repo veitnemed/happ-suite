@@ -9,8 +9,14 @@ from typing import Callable, Dict, List, Optional
 
 import requests
 
-from .config import Config
-from .core import Orchestrator, ComponentState, is_port_open
+try:
+    from .app_config import Config
+    from .core import Orchestrator, ComponentState, is_port_open, _reg_get_value
+    from .happ_controller import HappController
+except (ImportError, ValueError):
+    from app_config import Config
+    from core import Orchestrator, ComponentState, is_port_open, _reg_get_value
+    from happ_controller import HappController
 
 logger = logging.getLogger("happ_suite.health")
 
@@ -43,8 +49,8 @@ class HealthStatus:
 
 
 def check_tunnel(config: Config) -> bool:
-    """Check if VPN proxy port is open."""
-    return is_port_open("127.0.0.1", config.proxy_port, timeout_ms=800)
+    """Check that Windows routes externally through HAPP and HTTPS succeeds."""
+    return HappController(config.happ_exe).read_status().connected
 
 
 def check_service(url: str, proxy_url: str, timeout: int = 5) -> bool:
@@ -91,7 +97,6 @@ def full_health_check(config: Config) -> HealthStatus:
     status.ip_info = get_ip_info(config.proxy_url)
 
     # 4. Current server name from registry
-    from .core import _reg_get_value
     name = _reg_get_value(config.registry_pref, "lastServerName")
     if name:
         status.current_server = name
@@ -150,13 +155,25 @@ class HealthMonitor:
     def _check_once(self):
         """Run a single health check cycle."""
         tunnel_up = check_tunnel(self.config)
+        unlocker_up = self.orchestrator.ag_unlocker.is_running()
+        if self.orchestrator.desired_enabled:
+            if self.orchestrator.happ.state not in (ComponentState.STARTING, ComponentState.STOPPING):
+                self.orchestrator.happ.set_state(
+                    ComponentState.RUNNING if tunnel_up else ComponentState.DEGRADED
+                )
+            if self.orchestrator.ag_unlocker.state not in (ComponentState.STARTING, ComponentState.STOPPING):
+                if unlocker_up and self.orchestrator.ag_unlocker.model_verified():
+                    self.orchestrator.ag_unlocker.set_state(ComponentState.RUNNING)
+                elif not unlocker_up:
+                    self.orchestrator.ag_unlocker.set_state(ComponentState.ERROR)
+                elif self.orchestrator.ag_unlocker.state != ComponentState.ERROR:
+                    self.orchestrator.ag_unlocker.set_state(ComponentState.DEGRADED)
 
         if tunnel_up:
             self._consecutive_fails = 0
             status = HealthStatus()
             status.tunnel_up = True
 
-            from .core import _reg_get_value
             name = _reg_get_value(self.config.registry_pref, "lastServerName")
             if name:
                 status.current_server = name
@@ -167,16 +184,6 @@ class HealthMonitor:
         else:
             self._consecutive_fails += 1
             logger.warning(f"Tunnel DOWN (consecutive fails: {self._consecutive_fails})")
-
-            if self._consecutive_fails >= 3 and self.orchestrator.happ.state != ComponentState.STARTING:
-                logger.info("Auto-recovery: restarting VPN...")
-                self.orchestrator.happ.set_state(ComponentState.RECOVERING)
-                # Import here to avoid circular
-                from . import server_picker
-                results = server_picker.ping_all_servers(self.config)
-                best = server_picker.pick_best_server(results)
-                self.orchestrator.restart_vpn(server=best)
-                self._consecutive_fails = 0
 
             status = HealthStatus()
             status.tunnel_up = False

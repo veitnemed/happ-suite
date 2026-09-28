@@ -7,8 +7,8 @@ Components:
   3. AG Unlocker (ag_dns.exe) — Gemini DNS proxy
 
 Design:
-  - No UI flickering: Happ.exe is launched normally, then its window is hidden
-    via Win32 ShowWindow after the tunnel establishes.
+  - HAPP is launched with a pre-creation SW_HIDE startup hint; GUI applications
+    may ignore it, so an invisible launch is not guaranteed or verified.
   - Process health is monitored via TCP port checks, not process polling.
   - Components can be started/stopped independently or all at once.
 """
@@ -18,12 +18,20 @@ import logging
 import os
 import socket
 import subprocess
+import threading
 import time
 import winreg
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .config import Config
+try:
+    from .app_config import Config
+    from .happ_controller import HappController
+    from .ag_unlocker import ensure_dns_relay, read_gate_readiness, probe_model_response
+except (ImportError, ValueError):
+    from app_config import Config
+    from happ_controller import HappController
+    from ag_unlocker import ensure_dns_relay, read_gate_readiness, probe_model_response
 
 logger = logging.getLogger("happ_suite.core")
 
@@ -31,7 +39,9 @@ logger = logging.getLogger("happ_suite.core")
 class ComponentState(Enum):
     STOPPED = "stopped"
     STARTING = "starting"
+    STOPPING = "stopping"
     RUNNING = "running"
+    DEGRADED = "degraded"
     ERROR = "error"
     RECOVERING = "recovering"
 
@@ -77,51 +87,6 @@ def is_port_open(host: str, port: int, timeout_ms: int = 600) -> bool:
 
 
 # ─── Win32 helpers ─────────────────────────────────────────────
-
-def _find_and_hide_window(process_name: str = "Happ"):
-    """Find a window by process name and hide it with ShowWindow(hWnd, 0)."""
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-
-        EnumWindows = user32.EnumWindows
-        GetWindowThreadProcessId = user32.GetWindowThreadProcessId
-        IsWindowVisible = user32.IsWindowVisible
-        ShowWindow = user32.ShowWindow
-
-        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-
-        # Find PIDs of the target process
-        import psutil
-        target_pids = set()
-        for proc in psutil.process_iter(["pid", "name"]):
-            if proc.info["name"] and proc.info["name"].lower().startswith(process_name.lower()):
-                target_pids.add(proc.info["pid"])
-
-        if not target_pids:
-            return False
-
-        hidden = False
-
-        def enum_callback(hwnd, _lparam):
-            nonlocal hidden
-            if IsWindowVisible(hwnd):
-                pid = wintypes.DWORD()
-                GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                if pid.value in target_pids:
-                    ShowWindow(hwnd, 0)  # SW_HIDE
-                    hidden = True
-            return True
-
-        EnumWindows(WNDENUMPROC(enum_callback), 0)
-        return hidden
-    except Exception as e:
-        logger.warning(f"Failed to hide window for {process_name}: {e}")
-        return False
-
 
 # ─── Registry helpers ──────────────────────────────────────────
 
@@ -233,10 +198,12 @@ class HappVPNComponent(Component):
     def __init__(self, config: Config):
         super().__init__("Happ VPN")
         self.config = config
+        self.controller = HappController(config.happ_exe, config.tunnel_wait_timeout)
+        self.cancel_requested = threading.Event()
 
     def is_running(self) -> bool:
-        """Check if the VPN tunnel is up (proxy port open)."""
-        return is_port_open("127.0.0.1", self.config.proxy_port, timeout_ms=600)
+        """Require a HAPP-owned system route and a direct external response."""
+        return self.controller.read_status().connected
 
     def is_happ_process_alive(self) -> bool:
         """Check if Happ.exe process exists."""
@@ -249,97 +216,108 @@ class HappVPNComponent(Component):
             pass
         return False
 
-    def _write_server_to_registry(self, server: Dict):
-        """Write the target server to Windows registry so Happ connects to it."""
-        reg = self.config.registry_pref
-        # Server ID may exceed Int32 — write as DWORD (unsigned 32-bit)
-        server_id = server["id"] & 0xFFFFFFFF
-        _reg_set_value(reg, "lastServer", server_id, winreg.REG_DWORD)
-        _reg_set_value(reg, "lastServerName", server["name"])
-        _reg_set_value(reg, "startminimized", "true")
-        _reg_set_value(reg, "windowVisibility", 0, winreg.REG_DWORD)
-
-        subs_path = reg + "\\Subscriptions"
-        _reg_set_value(subs_path, "subsConnectOnOpen", "true")
-        _reg_set_value(subs_path, "subsConnectTypeOnOpen", "lastused")
-        _reg_set_value(subs_path, "subsPingOnOpen", "true")
-
-    def start(self, server: Optional[Dict] = None) -> bool:
-        """Start Happ VPN. If server is specified, switch to it first."""
-        if self.is_running():
-            self.set_state(ComponentState.RUNNING)
-            logger.info("Happ VPN tunnel already up")
-            return True
-
-        self.set_state(ComponentState.STARTING)
-
-        if server:
-            self._write_server_to_registry(server)
-
-        # Kill existing Happ.exe if present but not connected
-        if self.is_happ_process_alive():
-            logger.info("Killing stale Happ.exe...")
-            self._kill_happ()
-            time.sleep(0.5)
-
-        # Launch Happ.exe normally (required for auto-connect)
-        happ_exe = self.config.happ_exe
-        if not os.path.exists(happ_exe):
-            logger.error(f"Happ.exe not found: {happ_exe}")
-            self.set_state(ComponentState.ERROR)
-            return False
-
-        logger.info(f"Launching Happ.exe --autostart")
-        try:
-            subprocess.Popen(
-                [happ_exe, "--autostart"],
-                creationflags=subprocess.DETACHED_PROCESS,
-            )
-        except Exception as e:
-            logger.error(f"Failed to launch Happ.exe: {e}")
-            self.set_state(ComponentState.ERROR)
-            return False
-
-        # Wait for tunnel to establish
-        timeout = self.config.tunnel_wait_timeout
-        logger.info(f"Waiting for tunnel (port {self.config.proxy_port})... timeout={timeout}s")
-        for i in range(timeout):
-            time.sleep(1)
-            if self.is_running():
-                # Hide the window after connection
-                _find_and_hide_window("Happ")
-                self.set_state(ComponentState.RUNNING)
-                logger.info(f"Tunnel established in {i + 1}s")
-                return True
-
-        logger.warning(f"Tunnel timeout after {timeout}s")
-        # Try hiding anyway
-        _find_and_hide_window("Happ")
-        self.set_state(ComponentState.ERROR)
+    def can_recover(self) -> bool:
+        """Recovery belongs to the independent bridge, not this monitor."""
         return False
 
-    def stop(self):
-        """Stop Happ VPN."""
-        self._kill_happ()
-        self.set_state(ComponentState.STOPPED)
+    def _write_server_to_registry(self, server: Dict):
+        """Refuse undocumented registry control rather than changing user settings."""
+        logger.error("HAPP server selection through registry is undocumented; preferences were not changed")
+        return False
+
+    def get_status(self) -> Dict[str, object]:
+        """Report route and external reachability as separate observations."""
+        observed = self.controller.read_status()
+        return {
+            "state": self.state.value,
+            "happ_process_alive": observed.gui_pid is not None,
+            "happ_pid": observed.gui_pid,
+            "proxy_responsive": is_port_open("127.0.0.1", self.config.proxy_port),
+            "tunnel_verified": observed.connected,
+            "route_interface": observed.route.interface_alias,
+            "external_ok": observed.external_ok,
+            "active_profile_id": observed.active_profile_id,
+        }
+
+    def get_servers(self) -> List[Dict]:
+        return self.controller.list_profiles()
+
+    def start(self, server: Optional[Dict] = None) -> bool:
+        """Connect the profile already selected in HAPP through its existing GUI."""
+        if server is not None:
+            logger.error("HAPP profile selection is not verified; static config IDs are ignored")
+            self.set_state(ComponentState.ERROR)
+            return False
+        if self.cancel_requested.is_set():
+            self.set_state(ComponentState.STOPPED)
+            return False
+        self.set_state(ComponentState.STARTING)
+        try:
+            observed = self.controller.read_status()
+            if observed.connected:
+                self.set_state(ComponentState.RUNNING)
+                return True
+            if observed.gui_pid is None:
+                logger.error("Existing Happ.exe GUI IPC is unavailable; no second GUI is started")
+                self.set_state(ComponentState.ERROR)
+                return False
+            connected = self.controller.connect_current_profile()
+            if self.cancel_requested.is_set():
+                self.controller.disconnect()
+                self.set_state(ComponentState.STOPPED)
+                return False
+            self.set_state(ComponentState.RUNNING if connected else ComponentState.ERROR)
+            if not connected:
+                logger.error("HAPP accepted connect but TUN route and HTTPS were not verified")
+            return connected
+        except Exception:
+            logger.exception("HAPP connection through existing GUI failed")
+            self.set_state(ComponentState.ERROR)
+            return False
+
+    def stop(self) -> bool:
+        return self.disconnect()
+
+    def disconnect(self) -> bool:
+        """Disconnect HAPP's tunnel without closing the existing GUI process."""
+        self.set_state(ComponentState.STOPPING)
+        try:
+            disconnected = self.controller.disconnect()
+            self.set_state(ComponentState.STOPPED if disconnected else ComponentState.ERROR)
+            if not disconnected:
+                logger.error("HAPP accepted disconnect but the TUN route remained active")
+            return disconnected
+        except Exception:
+            logger.exception("HAPP disconnect through existing GUI failed")
+            self.set_state(ComponentState.ERROR)
+            return False
+
+    def stop_owned(self) -> bool:
+        """Compatibility entry point: F8 may disconnect a preexisting session."""
+        return self.disconnect()
 
     def switch_server(self, server: Dict) -> bool:
-        """Switch to a different VPN server."""
-        logger.info(f"Switching to server: {server['label']}")
-        self._write_server_to_registry(server)
-        self._kill_happ()
-        time.sleep(0.5)
+        """Selection requires a validated live HAPP catalog and command."""
         return self.start(server)
 
-    def _kill_happ(self):
-        try:
-            import psutil
-            for proc in psutil.process_iter(["name", "pid"]):
-                if proc.info["name"] and proc.info["name"].lower() == "happ.exe":
-                    proc.kill()
-                    logger.info(f"Killed Happ.exe (PID {proc.info['pid']})")
-        except Exception as e:
-            logger.warning(f"Failed to kill Happ.exe: {e}")
+def _post_close_to_pid(target_pid: int):
+    """Request a normal close from top-level windows owned by one PID."""
+    user32 = ctypes.windll.user32
+    get_pid = user32.GetWindowThreadProcessId
+    post_message = user32.PostMessageW
+    enum_windows = user32.EnumWindows
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    wm_close = 0x0010
+
+    def visit(hwnd, _):
+        pid = ctypes.wintypes.DWORD()
+        get_pid(hwnd, ctypes.byref(pid))
+        if pid.value == target_pid:
+            post_message(hwnd, wm_close, 0, 0)
+        return True
+
+    callback = callback_type(visit)
+    enum_windows(callback, 0)
 
 
 # ─── AG Unlocker Component ────────────────────────────────────
@@ -350,40 +328,48 @@ class AGUnlockerComponent(Component):
     def __init__(self, config: Config):
         super().__init__("AG Unlocker")
         self.config = config
+        self.activation_unix: float = 0.0
+        self.started_task_this_session = False
 
     def is_running(self) -> bool:
-        """Check if ag_dns.exe is running."""
+        """Require both the AG unlocker process and its local listener."""
+        from_process = False
         try:
             import psutil
             for proc in psutil.process_iter(["name"]):
                 if proc.info["name"] and proc.info["name"].lower() == "ag_dns.exe":
-                    return True
+                    from_process = any(
+                        conn.status == psutil.CONN_LISTEN
+                        for conn in proc.net_connections(kind="tcp")
+                    )
         except Exception:
-            pass
-        return False
+            logger.debug("Could not inspect AG Unlocker listener through process metadata")
+        return from_process or is_port_open(
+            "127.0.0.1", self.config.ag_unlocker_port, timeout_ms=600
+        )
 
     def start(self) -> bool:
-        """AG Unlocker is typically managed by its own installer/service.
-        We just detect if it's running."""
-        if self.is_running():
-            self.set_state(ComponentState.RUNNING)
-            logger.info("AG Unlocker already running")
-            return True
-
-        ag_path = self.config.ag_dns_path
-        if not ag_path or not os.path.exists(ag_path):
-            logger.info("AG Unlocker not found — Gemini unblocking will not be available")
-            self.set_state(ComponentState.STOPPED)
+        """Ensure the installer's headless Task Scheduler relay is available."""
+        self.activation_unix = time.time()
+        result = ensure_dns_relay()
+        self.started_task_this_session |= result.started_by_suite
+        if not result.ready:
+            logger.error("AG Unlocker DNS relay unavailable: %s", result.reason)
+            self.set_state(ComponentState.ERROR)
             return False
+        self.set_state(ComponentState.DEGRADED)
+        return True
 
-        # ag_dns is usually managed by the AGUnlocker application, we don't start it ourselves
-        logger.info("AG Unlocker found but not running — it should be started via the Antigravity Unlocker app")
-        self.set_state(ComponentState.STOPPED)
-        return False
+    def model_verified(self) -> bool:
+        if not self.activation_unix:
+            return False
+        return read_gate_readiness(self.activation_unix).ready
 
     def stop(self):
-        """We don't stop ag_dns — it's managed externally."""
+        """Leave the installer's persistent relay and NRPT/proxy rules intact."""
+        self.activation_unix = 0.0
         self.set_state(ComponentState.STOPPED)
+        return True
 
 
 # ─── Orchestrator ──────────────────────────────────────────────
@@ -408,6 +394,7 @@ class Orchestrator:
 
         self._components: List[Component] = [self.zapret, self.happ, self.ag_unlocker]
         self._on_state_change: Optional[Callable] = None
+        self.desired_enabled = False
 
     def on_state_change(self, callback: Callable):
         """Register a callback for component state changes."""
@@ -418,48 +405,80 @@ class Orchestrator:
     @property
     def overall_state(self) -> ComponentState:
         """Get the overall state of the suite."""
-        states = [c.state for c in self._components]
-
-        if all(s == ComponentState.STOPPED for s in states):
-            return ComponentState.STOPPED
+        states = [self.happ.state, self.ag_unlocker.state]
         if any(s == ComponentState.ERROR for s in states):
             return ComponentState.ERROR
-        if any(s == ComponentState.STARTING or s == ComponentState.RECOVERING for s in states):
+        if any(s in (ComponentState.STARTING, ComponentState.STOPPING, ComponentState.RECOVERING) for s in states):
             return ComponentState.STARTING
-        if self.happ.state == ComponentState.RUNNING:
+        if not self.desired_enabled and self.happ.state == ComponentState.STOPPED:
+            return ComponentState.STOPPED
+        if self.happ.state == ComponentState.RUNNING and self.ag_unlocker.state == ComponentState.RUNNING:
             return ComponentState.RUNNING
-        return ComponentState.STARTING
+        if any(s == ComponentState.DEGRADED for s in states):
+            return ComponentState.DEGRADED
+        return ComponentState.STOPPED if not self.desired_enabled else ComponentState.DEGRADED
 
     def start_all(self, target_server: Optional[Dict] = None) -> bool:
-        """Start all components. Returns True if VPN tunnel is up."""
+        """Start the requested services; full READY is a separate health state."""
         logger.info("=== Starting all components ===")
+        self.happ.cancel_requested.clear()
+        self.desired_enabled = True
 
-        # 1. Zapret (DPI bypass) — first, so it's ready when VPN connects
-        self.zapret.start()
+        happ_ok = self.happ.start(server=target_server)
+        unlocker_ok = self.ag_unlocker.start() if happ_ok else False
+        if happ_ok and unlocker_ok:
+            model_result = probe_model_response()
+            if model_result.success:
+                self.ag_unlocker.set_state(ComponentState.RUNNING)
+            else:
+                logger.error("Antigravity model response was not confirmed: %s", model_result.reason)
+                self.ag_unlocker.set_state(ComponentState.ERROR)
+                unlocker_ok = False
 
-        # 2. AG Unlocker — just detect
-        self.ag_unlocker.start()
+        happ_status = self.happ.get_status()
+        logger.info(
+            "=== Start complete. HAPP route: %s, tunnel verified: %s, AG Unlocker: %s ===",
+            happ_status["route_interface"],
+            happ_status["tunnel_verified"],
+            "RESPONSIVE" if unlocker_ok else "UNAVAILABLE",
+        )
+        return unlocker_ok and happ_ok
 
-        # 3. Happ VPN — last, because it depends on network
-        success = self.happ.start(server=target_server)
-
-        logger.info(f"=== Start complete. VPN tunnel: {'UP' if success else 'DOWN'} ===")
-        return success
-
-    def stop_all(self):
-        """Stop all components."""
+    def stop_all(self) -> bool:
+        """Disconnect HAPP and reset only Suite-owned state."""
         logger.info("=== Stopping all components ===")
-        self.happ.stop()
-        self.zapret.stop()
-        # AG Unlocker is managed externally, we leave it
-        logger.info("=== All components stopped ===")
+        self.happ.cancel_requested.set()
+        disconnected = self.happ.stop_owned()
+        if disconnected:
+            self.ag_unlocker.stop()
+            self.desired_enabled = False
+        logger.info("=== VPN disconnected: %s ===", disconnected)
+        return disconnected
+
+    def cancel_start(self):
+        """Cancel a pending startup without touching components owned by others."""
+        self.desired_enabled = False
+        self.happ.cancel_requested.set()
 
     def restart_vpn(self, server: Optional[Dict] = None) -> bool:
-        """Restart just the VPN component."""
-        self.happ.stop()
-        time.sleep(1)
-        return self.happ.start(server=server)
+        """Recovery must use the independent bridge with a restoration record."""
+        logger.error("In-process VPN restart is disabled; use the recovery bridge")
+        return False
 
     def get_status(self) -> Dict[str, str]:
         """Get status of all components."""
         return {comp.name: comp.state.value for comp in self._components}
+
+    def refresh_status(self):
+        """Read current service state without starting or stopping anything."""
+        observed = self.happ.controller.read_status()
+        self.desired_enabled = observed.route.through_happ
+        self.happ.set_state(
+            ComponentState.RUNNING if observed.connected else
+            ComponentState.DEGRADED if observed.route.through_happ else
+            ComponentState.STOPPED
+        )
+        self.ag_unlocker.set_state(
+            ComponentState.DEGRADED if self.desired_enabled and self.ag_unlocker.is_running()
+            else ComponentState.STOPPED
+        )

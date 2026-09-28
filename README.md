@@ -1,46 +1,42 @@
-# 🛡️ Happ Suite
+# Happ Suite
 
-**Единый менеджер обхода блокировок для Windows.**  
-Одна кнопка — YouTube, Discord, ChatGPT и Google Gemini работают.
+Happ Suite is a Windows system-tray controller for Happ VPN and the installed
+Antigravity Unlocker background service.
 
-## Что это?
+## Controls
 
-Happ Suite объединяет три инструмента обхода блокировок в одну программу с умным управлением:
+- Press **F8** or choose **F8 — включить / выключить** from the tray menu to
+  toggle the components.
+- Gray means off, yellow means starting, green means the Happ HTTPS proxy and
+  Unlocker listener respond, and red means an error.
+- The tray menu also contains **Выход**.
+- Starting Happ Suite does not connect the VPN automatically.
 
-| Компонент | Назначение |
-|-----------|------------|
-| **Zapret** (winws.exe) | DPI-обход для YouTube и Discord |
-| **Happ VPN** (xray) | VPN-туннель через зарубежные серверы |
-| **AG Unlocker** (ag_dns.exe) | Разблокировка Google Gemini в РФ |
+The suite does not open a console, browser, or Unlocker setup window while
+handling F8. It checks the Unlocker service already installed by AG Unlocker;
+that service is normally started by Windows at sign-in. The license key is kept
+in `%LOCALAPPDATA%\HappSuite\local.json`, outside the repository and packaged
+builds.
 
-## Возможности
+## Happ behavior
 
-- 🟢 **Одна кнопка** — запуск всех компонентов разом
-- 🔄 **Авто-восстановление** — после сна/пробуждения всё переподключается само
-- 🧠 **Детектор белых списков** — определяет глушилки БПЛА и переключает на антизаглушку
-- 📡 **Авто-выбор сервера** — пингует все VPN-узлы и выбирает лучший
-- 🔔 **Tray-индикатор** — иконка в трее показывает статус (🟢/🟡/🔴)
-- 📊 **CLI-дашборд** — полная диагностика в консоли
+The installed Happ 4.3.0 exposes a Windows service, but its public release notes
+do not document a command-line connect/disconnect interface. When no Happ process
+is open, the suite launches `Happ.exe` with the Windows initial-show state set
+to hidden, then checks HTTPS through Happ's configured local proxy. Whether the
+client connects on launch follows the settings already configured in Happ.
 
-## Быстрый старт
+The suite does not kill an unrelated `Happ.exe` process or stop the shared
+`HappService`. If a VPN session was already active before the suite started, it
+leaves that session untouched when disabling.
 
-1. Скачайте последний релиз из [Releases](../../releases)
-2. Распакуйте в любую папку
-3. Запустите `HappSuite.exe` от имени администратора
-4. Готово! Иконка в трее станет зелёной 🟢
+## Build
 
-## Требования
+Install the dependencies from `pyproject.toml` and PyInstaller, then run:
 
-- Windows 10/11 (64-bit)
-- [Happ VPN](https://hfreedns.com/) — установлен
-- Secure DNS включён в браузере ([инструкция](https://github.com/Flowseal/zapret-discord-youtube#%EF%B8%8F%D0%B8%D1%81%D0%BF%D0%BE%D0%BB%D1%8C%D0%B7%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D0%B5))
+```powershell
+py -3 scripts/build.py
+```
 
-## Благодарности
-
-- [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — DPI-обход
-- [bol-van/zapret](https://github.com/bol-van/zapret) — оригинальный zapret
-- [confeden/Antigravity](https://github.com/confeden/Antigravity) — Gemini Unlocker
-
-## Лицензия
-
-MIT
+The generated executable is written to `dist\HappSuite.exe` and is built
+without a console window.

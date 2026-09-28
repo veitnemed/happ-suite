@@ -13,22 +13,17 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
 if sys.stderr and hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# Setup logging first
-if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-LOG_DIR = os.path.join(BASE_DIR, "logs")
+# The onedir package may be installed in a read-only application directory.
+LOG_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "HappSuite", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
+log_handlers = [logging.FileHandler(os.path.join(LOG_DIR, "happ_suite.log"), encoding="utf-8")]
+if sys.stdout is not None:
+    log_handlers.append(logging.StreamHandler(sys.stdout))
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, "happ_suite.log"), encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=log_handlers,
 )
 logger = logging.getLogger("happ_suite")
 
@@ -64,11 +59,30 @@ def main():
     logger.info(f"CWD: {os.getcwd()}")
     logger.info("=" * 60)
 
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+    sys.excepthook = handle_exception
+
+    # Ensure current directory is in sys.path
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+
     # Import after logging is configured
-    from .config import Config
-    from .core import Orchestrator
-    from .health import HealthMonitor
-    from .tray import TrayApp
+    try:
+        from .app_config import Config
+        from .core import Orchestrator
+        from .health import HealthMonitor
+        from .tray import TrayApp
+    except (ImportError, ValueError):
+        from app_config import Config
+        from core import Orchestrator
+        from health import HealthMonitor
+        from tray import TrayApp
 
     # Load config
     config = Config()
