@@ -21,16 +21,17 @@ MOD_WIN = 0x0008
 
 VK_F8 = 0x77
 VK_F9 = 0x78
+VK_F10 = 0x79
 VK_H = 0x48
 VK_G = 0x47
+VK_D = 0x44
 
-HAPP_SHORTCUT = "Ctrl+Alt+H"
-GEMINI_SHORTCUT = "Ctrl+Alt+G"
 SHORTCUT_MODIFIERS = MOD_CONTROL | MOD_ALT
 
 DEFAULT_HOTKEYS = {
     "happ": (VK_H, SHORTCUT_MODIFIERS),
     "gemini": (VK_G, SHORTCUT_MODIFIERS),
+    "dns": (VK_D, SHORTCUT_MODIFIERS),
 }
 HOTKEYS_PATH = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "HappSuite" / "hotkeys.json"
 
@@ -70,10 +71,11 @@ def load_hotkey_choices(path: Path = HOTKEYS_PATH) -> dict[str, HotkeyChoice]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         for name in defaults:
-            value = data.get(name, {})
-            defaults[name] = HotkeyChoice(int(value["vk"]), int(value["modifiers"]))
-        if defaults["happ"] == defaults["gemini"]:
-            raise ValueError("HAPP and Gemini shortcuts must differ")
+            if name in data:
+                value = data[name]
+                defaults[name] = HotkeyChoice(int(value["vk"]), int(value["modifiers"]))
+        if len(set(defaults.values())) != len(defaults):
+            raise ValueError("Shortcuts must differ")
     except FileNotFoundError:
         pass
     except (OSError, ValueError, TypeError, KeyError) as exc:

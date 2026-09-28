@@ -1,4 +1,4 @@
-"""Run Happ Suite directly from this checkout: py -3 start.py."""
+"""Run Relay Studio directly from this checkout: py -3 start.py."""
 
 from pathlib import Path
 import ctypes
@@ -35,7 +35,7 @@ def _known_source_suite(process: psutil.Process) -> bool:
 
 
 def _stop_old_suite() -> None:
-    """Free Suite's hotkeys; never touch HAPP.exe or AG Unlocker."""
+    """Free the app's hotkeys without touching VPN or Antigravity processes."""
     session = _session_id(os.getpid())
     for process in psutil.process_iter(["pid", "exe"]):
         try:
@@ -45,7 +45,7 @@ def _stop_old_suite() -> None:
             if not executable or _session_id(process.pid) != session:
                 continue
             if _known_packaged_suite(Path(executable)) or _known_source_suite(process):
-                print(f"Stopping previous Happ Suite (PID {process.pid})", flush=True)
+                print(f"Stopping previous Relay Studio (PID {process.pid})", flush=True)
                 process.terminate()
                 process.wait(timeout=5)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -54,7 +54,7 @@ def _stop_old_suite() -> None:
 
 def main() -> None:
     if sys.platform != "win32":
-        raise SystemExit("Happ Suite needs Windows")
+        raise SystemExit("Relay Studio needs Windows")
     _stop_old_suite()
     from src.start import main as start_main
     start_main()

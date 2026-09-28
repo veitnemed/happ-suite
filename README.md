@@ -1,45 +1,28 @@
-# Happ Suite
+# Relay Studio
 
-Windows tray controls for Mihomo VPN, Antigravity and Gemini DNS.
+Приложение для Windows с двумя разделами: **VPN** и **Gemini + Antigravity**. VPN работает через Mihomo. Gemini Web управляет DNS текущей сети, а Antigravity запускает локальный relay. Каждый режим включается отдельно.
 
-## Запуск без сборки EXE
+## Запуск исходного кода
 
-Из папки проекта выполните `py -3 start.py`. Откроется окно с текущим кодом.
-Для запуска без консоли используйте `pyw -3 start.pyw`. Если запущена старая
-сборка Happ Suite, скрипт остановит только её процесс, чтобы освободить трей
-и горячие клавиши. HAPP и действующий VPN он не отключает.
+1. В папке проекта выполните `py -3 -m pip install -e .` (только при первой установке зависимостей).
+2. Запустите `py -3 start.py`. Для запуска без консоли используйте `pyw -3 start.pyw`.
+3. Откройте **Настройки** и установите Mihomo и компонент Antigravity, если их ещё нет.
+4. На странице **VPN** вставьте HTTPS-ссылку подписки и нажмите **Сохранить**. Узлы появятся в выпадающем списке. Ссылка сохраняется локально с защитой DPAPI.
 
-На этом компьютере автозапуск уже направлен на `start.pyw`, поэтому после входа
-в Windows работает версия из этой папки. Для переноса на другой ПК установите
-зависимости командой `py -3 -m pip install -e .`, затем запустите `start.py`.
-Собирать EXE имеет смысл после проверки сценария с вашей подпиской.
-Ссылка в окне показана обычным текстом и остаётся после сохранения. Вкладка
-**Настройки → Открыть журнал** показывает этапы загрузки без токена подписки.
-Пока подключён HAPP, Mihomo не запускает второй VPN-туннель. Для живой проверки
-переключение между ними выполняйте вручную после сохранения подписки.
+Закрытие окна сворачивает приложение в трей. Повторный запуск `start.py` открывает актуальный интерфейс и освобождает его горячие клавиши. Упаковка в EXE пока не требуется для работы исходного кода.
 
-## Quick start
+## Режимы
 
-1. Run `start.exe` and open **Настройки и установка**.
-2. Select **Install Mihomo**. The pinned Windows compatible release is checked by SHA-256 before installation.
-3. Paste your HTTPS subscription URL and select **Save**. Suite requests it as `mihomo/HappSuite-<version>`, sends a stable random installation HWID, validates the returned Mihomo YAML, and shows the discovered nodes. A browser page response triggers the documented `/mihomo` format endpoint before Suite reports an error.
-4. Select a node if needed, then use the VPN card to connect. Suite builds a local full-tunnel configuration from the fetched profile and confirms the authenticated local API, TUN route, and HTTPS connectivity.
-5. Use **Update nodes** to fetch the latest profile and **Select** to choose a node for the next or current run.
+- **VPN:** отдельное включение и выключение Mihomo. Выбор узла в списке применяется сразу либо при следующем подключении. Кнопка **Выбрать лучший зарубежный VPN** внизу страницы подключает зарубежный узел при выключенном VPN, сравнивает доступные узлы по задержке и проверяет страну фактического выхода. Узлы без указанной страны и российские узлы в автоматический выбор не попадают. Если подтвердить зарубежный выход не удалось, восстанавливается узел, активный перед сравнением.
+- **Gemini Web:** включает и возвращает DNS текущего Wi-Fi или Ethernet. Кнопки проверки сайта и открытия Gemini находятся в этом разделе. Доступность сайта сама по себе не подтверждает доступ к модели в аккаунте.
+- **Antigravity:** включает и выключает локальный relay независимо от VPN и DNS.
 
-Suite accepts a Mihomo YAML profile and does not convert Xray or other subscription formats. There is no `DIRECT` fallback. It never starts a second TUN when another Mihomo or HAPP tunnel is detected, and it stops Mihomo only when the saved process identity still matches the Suite-launched process.
+Если в Windows уже активен другой VPN-туннель, Mihomo не запускает второй. Отключите внешний VPN вручную, прежде чем включать Mihomo.
 
-## HAPP compatibility
+## Горячие клавиши и автозапуск
 
-The default backend is Mihomo. To use an existing HAPP installation, set `vpn_backend` to `happ` in `%LOCALAPPDATA%\HappSuite\local.json`. Suite runs only the selected backend. HAPP installation remains optional and is available from Settings in the setup package.
+По умолчанию: `Ctrl+Alt+H` — VPN, `Ctrl+Alt+D` — Gemini Web DNS, `Ctrl+Alt+G` — Antigravity. В **Настройках** можно выбрать F8/F10/F9, другие предложенные сочетания или записать свою клавишу. Там же включается запуск вместе с Windows и открывается локальный журнал.
 
-## Runtime data
+Данные прежней установки пока хранятся в `%LOCALAPPDATA%\HappSuite`: это сохраняет подписку, настройки и привязку уже работающего Mihomo после обновления исходного кода. Ссылка подписки не выводится в журнал.
 
-Mihomo, the validated subscription profile, generated configuration, subscription URL (DPAPI protected), random installation HWID, and process ownership records are stored under `%LOCALAPPDATA%\HappSuite\vpn\mihomo`. The subscription URL is fetched by Suite and is never embedded in the Mihomo configuration or written to logs.
-
-## Validation
-
-Unit tests mock provider responses and do not change routes or start a live TUN. A real connection still requires an available provider response, an administrator-approved TUN start, and no already-running external tunnel.
-
-The desktop build uses Windows per-monitor DPI awareness and a scalable Happ Suite mark for the window and executable icon.
-
-See [docs/MIHOMO.md](docs/MIHOMO.md) for implementation details and current limits.
+Сначала проверяйте изменения через `start.py`. Переключение VPN и DNS на рабочем компьютере выполняйте вручную; сборку EXE делайте после проверки интерфейса и режимов.

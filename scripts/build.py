@@ -1,4 +1,4 @@
-"""Build a windowless Happ Suite directory with an external default config."""
+"""Build a windowless Relay Studio directory with an external default config."""
 
 import argparse
 import json
@@ -36,11 +36,11 @@ def build(dist_dir=None, work_dir=None, entry="tray"):
     root_dir = Path(__file__).resolve().parent.parent
     if entry not in {"tray", "start"}:
         raise ValueError("entry must be tray or start")
-    app_name = "HappSuite" if entry == "tray" else "start"
+    app_name = "RelayStudio" if entry == "tray" else "start"
     main_py = root_dir / "src" / "main.py" if entry == "tray" else root_dir / "start_app.py"
     default_config = root_dir / "config" / "default.json"
-    manifest = root_dir / "assets" / "happ-suite.manifest"
-    app_icon = root_dir / "assets" / "happ-suite.ico"
+    manifest = root_dir / "assets" / "relay-studio.manifest"
+    app_icon = root_dir / "assets" / "relay-studio.ico"
     dist_dir = Path(dist_dir).resolve() if dist_dir else root_dir / "dist"
     work_dir = Path(work_dir).resolve() if work_dir else root_dir / "build" / app_name
 
@@ -80,7 +80,7 @@ def build(dist_dir=None, work_dir=None, entry="tray"):
     package_config = package_dir / "config" / "default.json"
     package_config.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(default_config, package_config)
-    package_icon = package_dir / "assets" / "happ-suite.ico"
+    package_icon = package_dir / "assets" / "relay-studio.ico"
     package_icon.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(app_icon, package_icon)
 

@@ -1,5 +1,5 @@
 """
-Happ Suite — main entry point.
+Relay Studio — main entry point.
 Launches the orchestrator, health monitor, and system tray UI.
 """
 import ctypes
@@ -35,7 +35,7 @@ def _single_instance_handle():
     kernel32.CreateMutexW.restype = ctypes.c_void_p
     handle = kernel32.CreateMutexW(None, True, r"Local\HappSuiteTray")
     if not handle:
-        raise OSError("Cannot create Happ Suite instance mutex")
+        raise OSError("Cannot create Relay Studio instance mutex")
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
         if "--elevated-vpn" in sys.argv or "--elevated-vpn-stop" in sys.argv:
             # The unelevated tray exits after UAC succeeds. Wait for its mutex
@@ -84,10 +84,10 @@ def main():
     """Main entry point."""
     mutex = _single_instance_handle()
     if mutex is None:
-        logger.info("Happ Suite is already running in this Windows session")
+        logger.info("Relay Studio is already running in this Windows session")
         return
     logger.info("=" * 60)
-    logger.info("Happ Suite v2.0 starting...")
+    logger.info("Relay Studio v2.0 starting...")
     logger.info(f"Admin: {is_admin()}")
     logger.info(f"Python: {sys.version}")
     logger.info(f"CWD: {os.getcwd()}")
@@ -145,7 +145,7 @@ def main():
         logger.info("Interrupted by user")
     finally:
         health_monitor.stop()
-        logger.info("Happ Suite stopped")
+        logger.info("Relay Studio stopped")
         _release_single_instance(mutex)
 
 

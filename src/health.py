@@ -11,12 +11,12 @@ import requests
 
 try:
     from .app_config import Config
-    from .core import Orchestrator, ComponentState, ComponentOwnership, is_port_open, _reg_get_value
-    from .happ_controller import HappController
+    from .core import Orchestrator, ComponentState, ComponentOwnership, is_port_open
+    from .mihomo_backend import MihomoVPNComponent
 except (ImportError, ValueError):
     from app_config import Config
-    from core import Orchestrator, ComponentState, ComponentOwnership, is_port_open, _reg_get_value
-    from happ_controller import HappController
+    from core import Orchestrator, ComponentState, ComponentOwnership, is_port_open
+    from mihomo_backend import MihomoVPNComponent
 
 logger = logging.getLogger("happ_suite.health")
 
@@ -49,8 +49,8 @@ class HealthStatus:
 
 
 def check_tunnel(config: Config) -> bool:
-    """Check that Windows routes externally through HAPP and HTTPS succeeds."""
-    return HappController(config.happ_exe).read_status().connected
+    """Check the selected Mihomo tunnel without starting another process."""
+    return MihomoVPNComponent(config).read_status().connected
 
 
 def check_service(url: str, proxy_url: str, timeout: int = 5) -> bool:
@@ -95,11 +95,6 @@ def full_health_check(config: Config) -> HealthStatus:
 
     # 3. IP info
     status.ip_info = get_ip_info(config.proxy_url)
-
-    # 4. Current server name from registry
-    name = _reg_get_value(config.registry_pref, "lastServerName")
-    if name:
-        status.current_server = name
 
     return status
 
@@ -154,17 +149,15 @@ class HealthMonitor:
 
     def _check_once(self):
         """Run a single health check cycle."""
-        vpn = self.orchestrator.happ
-        controller = vpn if hasattr(vpn, "read_status") else vpn.controller
-        happ_status = controller.read_status()
-        tunnel_up = happ_status.connected
+        vpn = self.orchestrator.vpn
+        vpn_status = vpn.read_status()
+        tunnel_up = vpn_status.connected
         unlocker_up = self.orchestrator.ag_unlocker.is_running()
-        happ = vpn
-        if happ_status.route.through_happ and happ.ownership == ComponentOwnership.UNKNOWN:
-            happ.ownership = ComponentOwnership.EXTERNAL
-        happ.observe(
+        if vpn_status.route.through_happ and vpn.ownership == ComponentOwnership.UNKNOWN:
+            vpn.ownership = ComponentOwnership.EXTERNAL
+        vpn.observe(
             ComponentState.RUNNING if tunnel_up else
-            ComponentState.DEGRADED if happ_status.route.through_happ else
+            ComponentState.DEGRADED if vpn_status.route.through_happ else
             ComponentState.STOPPED,
             preserve_transition=True,
         )
@@ -186,9 +179,7 @@ class HealthMonitor:
             status = HealthStatus()
             status.tunnel_up = True
 
-            name = _reg_get_value(self.config.registry_pref, "lastServerName")
-            if name:
-                status.current_server = name
+            status.current_server = getattr(vpn, "_last_good_node", None) or "Не определён"
 
             self.last_status = status
             if self._on_health_update:

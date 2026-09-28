@@ -20,7 +20,7 @@ class TrayToggleTests(unittest.TestCase):
 
         controller = Mock()
         controller.read_status.return_value = SimpleNamespace(
-            route=SimpleNamespace(through_happ=through_happ)
+            route=SimpleNamespace(through_happ=through_happ, interface_alias=None)
         )
 
         ag_mock = Mock()

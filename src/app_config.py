@@ -1,5 +1,5 @@
 """
-Configuration manager for Happ Suite.
+Configuration manager for Relay Studio.
 Loads default.json, merges with user overrides, auto-discovers component paths.
 """
 import json
@@ -68,15 +68,13 @@ class Config:
             with default_path.open("r", encoding="utf-8") as f:
                 self._data = json.load(f)
         elif getattr(sys, "frozen", False):
-            raise FileNotFoundError(f"Happ Suite configuration is missing: {default_path}")
+            raise FileNotFoundError(f"Relay Studio configuration is missing: {default_path}")
         else:
             self._data = {
                 "vpn_backend": "mihomo",
                 "mihomo_wait_timeout_sec": 50,
-                "happ_exe": r"C:\Program Files\FlyFrogLLC\Happ\Happ.exe",
                 "proxy_port": 10809,
                 "proxy_url": "http://127.0.0.1:10809",
-                "registry_pref": r"HKCU\Software\Happ\OrganizationDefaults\Preferences",
                 "servers": [],
                 "health_check_interval_sec": 30,
                 "tunnel_wait_timeout_sec": 45,
@@ -111,13 +109,8 @@ class Config:
             self._data["ag_dns_path"] = _find_ag_dns()
 
     @property
-    def happ_exe(self) -> str:
-        return self._data.get("happ_exe", r"C:\Program Files\FlyFrogLLC\Happ\Happ.exe")
-
-    @property
     def vpn_backend(self) -> str:
-        value = str(self._data.get("vpn_backend", "mihomo")).casefold()
-        return value if value in {"mihomo", "happ"} else "mihomo"
+        return "mihomo"
 
     @property
     def mihomo_wait_timeout(self) -> int:
@@ -157,10 +150,6 @@ class Config:
         return self._data.get("ag_unlocker_port", 53129)
 
     @property
-    def registry_pref(self) -> str:
-        return self._data.get("registry_pref", r"HKCU\Software\Happ\OrganizationDefaults\Preferences")
-
-    @property
     def servers(self) -> List[Dict[str, Any]]:
         return self._data.get("servers", [])
 
@@ -189,6 +178,6 @@ class Config:
 
     def __repr__(self):
         return (
-            f"Config(happ={self.happ_exe!r}, zapret={self.zapret_dir!r}, "
+            f"Config(vpn={self.vpn_backend!r}, zapret={self.zapret_dir!r}, "
             f"ag_dns={self.ag_dns_path!r}, servers={len(self.servers)})"
         )

@@ -1,4 +1,4 @@
-"""Windowed Happ Suite entry point. Closing the window keeps tray controls alive."""
+"""Windowed Relay Studio entry point. Closing the window keeps tray controls alive."""
 
 import argparse
 import ctypes
@@ -77,6 +77,7 @@ def main():
     parser.add_argument("--background", action="store_true", help="start in the tray after Windows sign-in")
     parser.add_argument("--elevated-vpn", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--elevated-vpn-stop", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--best-foreign", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--gemini-dns-helper", choices=("enable", "disable"), help=argparse.SUPPRESS)
     parser.add_argument("--dns-result", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -123,6 +124,9 @@ def main():
         tray = TrayApp(orchestrator, config, health, on_open_dashboard=show_window,
                        on_exit=exit_window)
         dashboard = Dashboard(root, tray, config)
+        tray.on_toggle_dns = lambda: root.after(0, dashboard._toggle_gemini_dns)
+        if args.best_foreign and orchestrator.vpn.read_status(with_external_probe=False).connected:
+            root.after(500, dashboard._choose_best_vpn_node)
 
         def run_tray():
             try:

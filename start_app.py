@@ -1,4 +1,4 @@
-"""Package-aware entry point for the windowed Happ Suite application."""
+"""Package-aware entry point for the windowed Relay Studio application."""
 
 from src.start import main
 

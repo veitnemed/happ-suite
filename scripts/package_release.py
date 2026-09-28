@@ -7,7 +7,7 @@ from pathlib import Path
 import zipfile
 
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "dist" / "start"
 OUTPUT = ROOT / "dist" / "release"
@@ -19,7 +19,7 @@ def build_zip(variant: str, source: Path = SOURCE, output: Path = OUTPUT) -> Pat
     if not (source / "start.exe").is_file() or not (source / "config" / "default.json").is_file():
         raise FileNotFoundError("Build start.exe first: py -3 scripts/build.py --entry start")
     output.mkdir(parents=True, exist_ok=True)
-    zip_path = output / f"HappSuite-{variant}-{VERSION}-win-x64.zip"
+    zip_path = output / f"RelayStudio-{variant}-{VERSION}-win-x64.zip"
     readme = (ROOT / "README.md").read_bytes()
     license_text = (ROOT / "LICENSE").read_bytes()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:

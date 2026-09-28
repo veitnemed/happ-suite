@@ -1,2 +1,2 @@
-"""Happ Suite — unified bypass manager."""
+"""Relay Studio — VPN, Gemini Web DNS and Antigravity controls."""
 __version__ = "2.0.0"

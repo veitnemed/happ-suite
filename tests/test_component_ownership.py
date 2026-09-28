@@ -10,12 +10,9 @@ from src.core import (
     ComponentOwnership,
     ComponentState,
     DesiredState,
-    HappVPNComponent,
     Orchestrator,
     ZapretComponent,
 )
-from src.happ_controller import HappStatus
-from src.happ_status import TunnelRoute
 from src.health import HealthMonitor
 
 
@@ -29,105 +26,59 @@ class RuntimeStateTests(unittest.TestCase):
         self.assertEqual(component.observed_state, ComponentState.RUNNING)
         self.assertEqual(component.state, ComponentState.STOPPING)
 
-    def test_health_observation_does_not_change_happ_intent(self):
-        happ = Component("HAPP")
-        happ.controller = SimpleNamespace(read_status=Mock(return_value=SimpleNamespace(
+    def test_health_observation_does_not_change_vpn_intent(self):
+        vpn = Component("VPN")
+        vpn.read_status = Mock(return_value=SimpleNamespace(
             route=SimpleNamespace(through_happ=True), connected=True
-        )))
+        ))
         ag = Component("AG")
         ag.is_running = Mock(return_value=False)
-        orchestrator = SimpleNamespace(happ=happ, ag_unlocker=ag)
-        monitor = HealthMonitor(orchestrator, SimpleNamespace(registry_pref="unused"))
+        orchestrator = SimpleNamespace(vpn=vpn, ag_unlocker=ag)
+        monitor = HealthMonitor(orchestrator, SimpleNamespace())
 
-        with patch("src.health._reg_get_value", return_value=None):
-            monitor._check_once()
+        monitor._check_once()
 
-        self.assertEqual(happ.desired_state, DesiredState.OFF)
-        self.assertEqual(happ.observed_state, ComponentState.RUNNING)
-        self.assertEqual(happ.ownership, ComponentOwnership.EXTERNAL)
+        self.assertEqual(vpn.desired_state, DesiredState.OFF)
+        self.assertEqual(vpn.observed_state, ComponentState.RUNNING)
+        self.assertEqual(vpn.ownership, ComponentOwnership.EXTERNAL)
 
-    def test_external_happ_route_without_https_is_degraded_not_stopped(self):
-        happ = Component("HAPP")
-        happ.controller = SimpleNamespace(read_status=Mock(return_value=SimpleNamespace(
+    def test_vpn_route_without_https_is_degraded_not_stopped(self):
+        vpn = Component("VPN")
+        vpn.read_status = Mock(return_value=SimpleNamespace(
             route=SimpleNamespace(through_happ=True), connected=False
-        )))
+        ))
         ag = Component("AG")
         ag.is_running = Mock(return_value=False)
         monitor = HealthMonitor(
-            SimpleNamespace(happ=happ, ag_unlocker=ag),
-            SimpleNamespace(registry_pref="unused"),
+            SimpleNamespace(vpn=vpn, ag_unlocker=ag),
+            SimpleNamespace(),
         )
 
-        with patch("src.health._reg_get_value", return_value=None):
-            monitor._check_once()
+        monitor._check_once()
 
-        self.assertEqual(happ.desired_state, DesiredState.OFF)
-        self.assertEqual(happ.observed_state, ComponentState.DEGRADED)
-        self.assertEqual(happ.ownership, ComponentOwnership.EXTERNAL)
+        self.assertEqual(vpn.desired_state, DesiredState.OFF)
+        self.assertEqual(vpn.observed_state, ComponentState.DEGRADED)
+        self.assertEqual(vpn.ownership, ComponentOwnership.EXTERNAL)
 
     def test_refresh_status_does_not_change_any_component_intent(self):
-        happ = Component("HAPP")
-        happ.controller = SimpleNamespace(read_status=Mock(return_value=SimpleNamespace(
+        vpn = Component("VPN")
+        vpn.read_status = Mock(return_value=SimpleNamespace(
             route=SimpleNamespace(through_happ=True), connected=True
-        )))
+        ))
         ag = Component("AG")
         ag.is_running = Mock(return_value=True)
         zapret = ZapretComponent(SimpleNamespace())
         zapret._winws_processes = Mock(return_value={321: (10.0, r"c:\zapret\winws.exe")})
-        orchestrator = SimpleNamespace(happ=happ, ag_unlocker=ag, zapret=zapret)
+        orchestrator = SimpleNamespace(happ=vpn, ag_unlocker=ag, zapret=zapret)
 
         Orchestrator.refresh_status(orchestrator)
 
-        self.assertEqual(happ.desired_state, DesiredState.OFF)
+        self.assertEqual(vpn.desired_state, DesiredState.OFF)
         self.assertEqual(ag.desired_state, DesiredState.OFF)
         self.assertEqual(zapret.desired_state, DesiredState.OFF)
-        self.assertEqual(happ.ownership, ComponentOwnership.EXTERNAL)
+        self.assertEqual(vpn.ownership, ComponentOwnership.EXTERNAL)
         self.assertEqual(ag.ownership, ComponentOwnership.EXTERNAL)
         self.assertEqual(zapret.ownership, ComponentOwnership.EXTERNAL)
-
-
-class HappOwnershipTests(unittest.TestCase):
-    def setUp(self):
-        config = SimpleNamespace(
-            happ_exe=r"C:\Program Files\FlyFrogLLC\Happ\Happ.exe",
-            tunnel_wait_timeout=1,
-            proxy_port=10809,
-        )
-        self.component = HappVPNComponent(config)
-        self.component.controller = Mock()
-
-    @staticmethod
-    def _connected_status():
-        route = TunnelRoute(42, "happ-xray", True)
-        return HappStatus(route, True, 123)
-
-    def test_existing_tunnel_is_external_and_is_not_disconnected(self):
-        self.component.controller.read_status.return_value = self._connected_status()
-        self.assertTrue(self.component.start())
-
-        self.assertEqual(self.component.ownership, ComponentOwnership.EXTERNAL)
-        self.assertEqual(self.component.desired_state, DesiredState.ON)
-        self.assertTrue(self.component.stop_owned())
-        self.component.controller.disconnect.assert_not_called()
-        self.assertEqual(self.component.desired_state, DesiredState.OFF)
-        self.assertEqual(self.component.observed_state, ComponentState.RUNNING)
-
-    def test_suite_owned_tunnel_can_be_disconnected(self):
-        self.component.ownership = ComponentOwnership.SUITE
-        self.component.controller.disconnect.return_value = True
-
-        self.assertTrue(self.component.stop_owned())
-
-        self.component.controller.disconnect.assert_called_once()
-        self.assertEqual(self.component.ownership, ComponentOwnership.UNKNOWN)
-        self.assertEqual(self.component.observed_state, ComponentState.STOPPED)
-
-    def test_unknown_happ_ownership_blocks_disconnect(self):
-        self.component.controller.disconnect.return_value = True
-
-        self.assertTrue(self.component.stop_owned())
-
-        self.component.controller.disconnect.assert_not_called()
 
 
 class AGOwnershipTests(unittest.TestCase):

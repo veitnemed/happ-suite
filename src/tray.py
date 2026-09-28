@@ -1,5 +1,5 @@
 """
-System Tray UI for Happ Suite.
+System Tray UI for Relay Studio.
 Shows 🟢/🟡/🔴 icon + context menu with two independent controls:
   • Ctrl+Alt+H — toggle VPN
   • Ctrl+Alt+G — toggle AG Unlocker
@@ -15,7 +15,7 @@ try:
     from .core import Orchestrator, ComponentState, ComponentOwnership
     from .health import HealthMonitor, HealthStatus
     from .hotkey import (GlobalHotkey, HotkeyChoice, NextKeyCapture, VK_H, VK_G,
-                         VK_F8, VK_F9, SHORTCUT_MODIFIERS, load_hotkey_choices,
+                         VK_D, VK_F8, VK_F9, VK_F10, SHORTCUT_MODIFIERS, load_hotkey_choices,
                          save_hotkey_choices)
     from .windows_elevation import is_admin, relaunch_vpn_elevated
 except (ImportError, ValueError):
@@ -23,7 +23,7 @@ except (ImportError, ValueError):
     from core import Orchestrator, ComponentState, ComponentOwnership
     from health import HealthMonitor, HealthStatus
     from hotkey import (GlobalHotkey, HotkeyChoice, NextKeyCapture, VK_H, VK_G,
-                        VK_F8, VK_F9, SHORTCUT_MODIFIERS, load_hotkey_choices,
+                        VK_D, VK_F8, VK_F9, VK_F10, SHORTCUT_MODIFIERS, load_hotkey_choices,
                         save_hotkey_choices)
     from windows_elevation import is_admin, relaunch_vpn_elevated
 
@@ -67,15 +67,16 @@ def _create_icon_image(color: str, letter: str = "H") -> Image.Image:
 
 
 class TrayApp:
-    """System tray application for Happ Suite."""
+    """System tray application for Relay Studio."""
 
     def __init__(self, orchestrator: Orchestrator, config: Config, health_monitor: HealthMonitor,
-                 on_open_dashboard=None, on_exit=None):
+                 on_open_dashboard=None, on_exit=None, on_toggle_dns=None):
         self.orchestrator = orchestrator
         self.config = config
         self.health_monitor = health_monitor
         self.on_open_dashboard = on_open_dashboard
         self.on_exit = on_exit
+        self.on_toggle_dns = on_toggle_dns
         self._icon = None
         self._happ_icon = None
         self._gemini_icon = None
@@ -95,8 +96,14 @@ class TrayApp:
             self._on_gemini_shortcut,
             self._hotkey_choices["gemini"].modifiers,
         )
+        self._hotkey_dns = GlobalHotkey(
+            self._hotkey_choices["dns"].vk,
+            self._on_dns_shortcut,
+            self._hotkey_choices["dns"].modifiers,
+        )
         self._happ_hotkey_registered = False
         self._gemini_hotkey_registered = False
+        self._dns_hotkey_registered = False
         self._hotkey_change_lock = threading.Lock()
         self._capture_active = False
 
@@ -228,7 +235,7 @@ class TrayApp:
             ComponentState.STOPPED:   "AG: Выключен",
         }
         parts = [
-            "Happ Suite",
+            "Relay Studio",
             happ_names.get(happ_st, "VPN: ?"),
             ag_names.get(ag_st, "AG: ?"),
         ]
@@ -236,6 +243,8 @@ class TrayApp:
             parts.append(f"⚠ {self._hotkey_choices['happ'].label} недоступна")
         if not self._gemini_hotkey_registered:
             parts.append(f"⚠ {self._hotkey_choices['gemini'].label} недоступна")
+        if not self._dns_hotkey_registered:
+            parts.append(f"⚠ {self._hotkey_choices['dns'].label} недоступна")
 
         health = self.health_monitor.last_status
         if health and health.tunnel_up and health.current_server != "Не определен":
@@ -281,12 +290,16 @@ class TrayApp:
             return getattr(self, "_happ_icon", None) or getattr(self, "_icon", None)
         return getattr(self, "_gemini_icon", None) or getattr(self, "_icon", None)
 
+    def _vpn_name(self) -> str:
+        return "Mihomo"
+
     def _setup_gemini_icon(self, icon) -> None:
         """Show the second icon and confirm the tray app has started."""
         icon.visible = True
         happ_key = self._hotkey_choices["happ"].label
         gemini_key = self._hotkey_choices["gemini"].label
-        self._notify(icon, f"{happ_key} — VPN   •   {gemini_key} — Gemini relay", "Happ Suite запущен")
+        dns_key = self._hotkey_choices["dns"].label
+        self._notify(icon, f"{happ_key} — VPN · {dns_key} — DNS · {gemini_key} — relay", "Relay Studio запущен")
 
     # ── Menu ──────────────────────────────────────────────────────────────────
 
@@ -303,9 +316,9 @@ class TrayApp:
             pystray.Menu.SEPARATOR,
         ]
         if self.on_open_dashboard:
-            items.append(pystray.MenuItem("Открыть окно Happ Suite",
+            items.append(pystray.MenuItem("Открыть Relay Studio",
                                           lambda icon, item: self.on_open_dashboard()))
-        items.append(pystray.MenuItem("Выход Happ Suite", lambda icon, item: self._action_exit()))
+        items.append(pystray.MenuItem("Выход из Relay Studio", lambda icon, item: self._action_exit()))
         return pystray.Menu(*items)
 
     def _build_gemini_menu(self):
@@ -317,20 +330,23 @@ class TrayApp:
         items = [
             pystray.MenuItem(lambda item: self._ag_label(), on_toggle),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Горячая клавиша Gemini", self._shortcut_menu("gemini")),
+            pystray.MenuItem("Gemini Web DNS", lambda icon, item: self._schedule_toggle_dns()),
+            pystray.MenuItem("Клавиша Gemini Web", self._shortcut_menu("dns")),
+            pystray.MenuItem("Клавиша Antigravity", self._shortcut_menu("gemini")),
             pystray.Menu.SEPARATOR,
         ]
         if self.on_open_dashboard:
-            items.append(pystray.MenuItem("Открыть окно Happ Suite",
+            items.append(pystray.MenuItem("Открыть Relay Studio",
                                           lambda icon, item: self.on_open_dashboard()))
-        items.append(pystray.MenuItem("Выход Happ Suite", lambda icon, item: self._action_exit()))
+        items.append(pystray.MenuItem("Выход из Relay Studio", lambda icon, item: self._action_exit()))
         return pystray.Menu(*items)
 
     def _shortcut_menu(self, component: str):
         import pystray
 
-        default = HotkeyChoice(VK_H if component == "happ" else VK_G, SHORTCUT_MODIFIERS)
-        legacy = HotkeyChoice(VK_F8 if component == "happ" else VK_F9)
+        default = HotkeyChoice({"happ": VK_H, "dns": VK_D, "gemini": VK_G}[component],
+                               SHORTCUT_MODIFIERS)
+        legacy = HotkeyChoice({"happ": VK_F8, "dns": VK_F10, "gemini": VK_F9}[component])
         return pystray.Menu(
             pystray.MenuItem("Нажать нужную клавишу (10 секунд)",
                              lambda icon, item: self._capture_shortcut(component)),
@@ -344,7 +360,7 @@ class TrayApp:
 
     def _capture_shortcut(self, component: str):
         if not self._hotkey_change_lock.acquire(blocking=False):
-            self._notify(self._notification_icon(component), "Назначение клавиши уже идёт.", "Happ Suite")
+            self._notify(self._notification_icon(component), "Назначение клавиши уже идёт.", "Relay Studio")
             return
 
         def worker():
@@ -355,12 +371,12 @@ class TrayApp:
                 choice = NextKeyCapture().capture(timeout=10)
                 if choice is None:
                     self._notify(self._notification_icon(component),
-                                 "Клавиша не обнаружена или назначение отменено.", "Happ Suite")
+                                 "Клавиша не обнаружена или назначение отменено.", "Relay Studio")
                 else:
                     self._set_shortcut_locked(component, choice)
             except Exception:
                 logger.exception("Could not capture shortcut")
-                self._notify(self._notification_icon(component), "Ошибка распознавания клавиши.", "Happ Suite")
+                self._notify(self._notification_icon(component), "Ошибка распознавания клавиши.", "Relay Studio")
             finally:
                 self._capture_active = False
                 self._hotkey_change_lock.release()
@@ -369,7 +385,7 @@ class TrayApp:
 
     def _set_shortcut(self, component: str, choice: HotkeyChoice):
         if not self._hotkey_change_lock.acquire(blocking=False):
-            self._notify(self._notification_icon(component), "Назначение клавиши уже идёт.", "Happ Suite")
+            self._notify(self._notification_icon(component), "Назначение клавиши уже идёт.", "Relay Studio")
             return
         try:
             self._set_shortcut_locked(component, choice)
@@ -379,15 +395,15 @@ class TrayApp:
     def _set_shortcut_locked(self, component: str, choice: HotkeyChoice):
         if choice == self._hotkey_choices[component]:
             return
-        other = "gemini" if component == "happ" else "happ"
-        if choice == self._hotkey_choices[other]:
-            self._notify(self._notification_icon(component), "Эта клавиша уже назначена другой функции.", "Happ Suite")
+        if choice in (value for name, value in self._hotkey_choices.items() if name != component):
+            self._notify(self._notification_icon(component), "Эта клавиша уже назначена другой функции.", "Relay Studio")
             return
-        callback = self._on_happ_shortcut if component == "happ" else self._on_gemini_shortcut
+        callback = {"happ": self._on_happ_shortcut, "dns": self._on_dns_shortcut,
+                    "gemini": self._on_gemini_shortcut}[component]
         candidate = GlobalHotkey(choice.vk, callback, choice.modifiers)
         if not candidate.start():
             self._notify(self._notification_icon(component),
-                         f"Windows не разрешила назначить {choice.label}. Старая клавиша работает.", "Happ Suite")
+                         f"Windows не разрешила назначить {choice.label}. Старая клавиша работает.", "Relay Studio")
             return
         updated = dict(self._hotkey_choices)
         updated[component] = choice
@@ -396,19 +412,23 @@ class TrayApp:
         except OSError:
             candidate.stop()
             logger.exception("Could not save shortcut")
-            self._notify(self._notification_icon(component), "Не удалось сохранить клавишу.", "Happ Suite")
+            self._notify(self._notification_icon(component), "Не удалось сохранить клавишу.", "Relay Studio")
             return
-        old = self._hotkey_happ if component == "happ" else self._hotkey_ag
+        old = {"happ": self._hotkey_happ, "dns": self._hotkey_dns,
+               "gemini": self._hotkey_ag}[component]
         if component == "happ":
             self._hotkey_happ = candidate
             self._happ_hotkey_registered = True
+        elif component == "dns":
+            self._hotkey_dns = candidate
+            self._dns_hotkey_registered = True
         else:
             self._hotkey_ag = candidate
             self._gemini_hotkey_registered = True
         self._hotkey_choices = updated
         old.stop()
         self._update_icon()
-        self._notify(self._notification_icon(component), f"Назначено: {choice.label}", "Happ Suite")
+        self._notify(self._notification_icon(component), f"Назначено: {choice.label}", "Relay Studio")
 
     # ── Hotkey handlers ───────────────────────────────────────────────────────
 
@@ -426,15 +446,39 @@ class TrayApp:
         self._notify(self._notification_icon("gemini"), "Переключаю Gemini relay…", "Gemini")
         self._schedule_toggle_ag()
 
+    def _on_dns_shortcut(self):
+        if self._capture_active:
+            return
+        logger.info("Global %s hotkey received → toggle Gemini Web DNS",
+                    self._hotkey_choices["dns"].label)
+        self._schedule_toggle_dns()
+
+    def _schedule_toggle_dns(self):
+        if self.on_toggle_dns is None:
+            self._notify(self._notification_icon("gemini"),
+                         "Откройте окно Relay Studio для настройки Gemini Web DNS.", "Gemini Web")
+            return
+        self.on_toggle_dns()
+
     # ── Toggle helpers ────────────────────────────────────────────────────────
 
-    def _schedule_toggle_happ(self):
-        """Schedule Happ VPN toggle in a background thread."""
+    def _schedule_toggle_happ(self, *, best_foreign: bool = False):
+        """Schedule the selected VPN backend in a background thread."""
         component = self.orchestrator.happ
+        vpn_name = self._vpn_name()
         backend = getattr(getattr(self, "config", None), "vpn_backend", "happ")
         if backend == "mihomo":
             observed = component.read_status(with_external_probe=False)
             connect_requested = not observed.route.through_happ
+            route_alias = (observed.route.interface_alias or "").casefold()
+            if connect_requested and route_alias.startswith("happ-"):
+                message = ("Сейчас подключён другой VPN. Отключите его перед запуском Mihomo; "
+                           "Relay Studio не трогает чужой туннель.")
+                component.last_error = message
+                component.set_state(ComponentState.ERROR)
+                logger.info("Mihomo start blocked by active external VPN route")
+                self._notify(self._notification_icon("happ"), message, "Mihomo — ошибка")
+                return
             if hasattr(component, "observe"):
                 component.observe(
                     ComponentState.RUNNING if observed.connected else
@@ -449,7 +493,9 @@ class TrayApp:
             and (connect_requested or component.ownership == ComponentOwnership.SUITE)
         )
         if needs_elevation:
-            elevated, result = relaunch_vpn_elevated(connect=connect_requested)
+            elevated, result = relaunch_vpn_elevated(
+                connect=connect_requested, best_foreign=best_foreign,
+            )
             if elevated:
                 self._notify(self._notification_icon("happ"),
                              "Подтвердите запрос UAC. Suite перезапустится и выполнит команду VPN.", "VPN")
@@ -463,17 +509,20 @@ class TrayApp:
             # If we're in the middle of starting, allow cancel
             if self.orchestrator.happ.state == ComponentState.STARTING:
                 self.orchestrator.cancel_start()
-                self._notify(self._notification_icon("happ"), "Отменяю подключение…", "HAPP")
+                self._notify(self._notification_icon("happ"), "Отменяю подключение…", vpn_name)
             else:
-                self._notify(self._notification_icon("happ"), "Подождите: операция ещё выполняется.", "HAPP")
+                self._notify(self._notification_icon("happ"), "Подождите: операция ещё выполняется.", vpn_name)
             return
 
         def do_toggle():
             try:
                 ok = self.orchestrator.toggle_happ()
                 if not ok:
-                    logger.error("Happ VPN toggle did not reach the requested state")
-                    self._notify(self._notification_icon("happ"), "Не удалось переключить VPN. Подробности в журнале.", "HAPP — ошибка")
+                    logger.error("%s VPN toggle did not reach the requested state", vpn_name)
+                    reason = getattr(component, "last_error", None)
+                    self._notify(self._notification_icon("happ"),
+                                 reason or "Не удалось переключить VPN. Подробности в журнале.",
+                                 f"{vpn_name} — ошибка")
                 elif (getattr(self.orchestrator.happ, "ownership", ComponentOwnership.UNKNOWN)
                       != ComponentOwnership.SUITE
                       and getattr(getattr(self.orchestrator.happ, "desired_state", None), "value", None) == "off"
@@ -481,20 +530,20 @@ class TrayApp:
                     self._notify(self._notification_icon("happ"),
                                  "Внешний туннель активен. Suite оставил его без изменений.", "VPN")
                 elif self.orchestrator.happ.state == ComponentState.RUNNING:
-                    self._notify(self._notification_icon("happ"), "VPN подключён.", "HAPP")
+                    self._notify(self._notification_icon("happ"), "VPN подключён.", vpn_name)
                 elif self.orchestrator.happ.state == ComponentState.STOPPED:
-                    self._notify(self._notification_icon("happ"), "VPN отключён.", "HAPP")
+                    self._notify(self._notification_icon("happ"), "VPN отключён.", vpn_name)
                 else:
-                    self._notify(self._notification_icon("happ"), "Состояние VPN не подтверждено.", "HAPP")
+                    self._notify(self._notification_icon("happ"), "Состояние VPN не подтверждено.", vpn_name)
                 self.health_monitor.start()
             except Exception:
-                logger.exception("Happ VPN toggle failed")
+                logger.exception("%s VPN toggle failed", vpn_name)
                 self.orchestrator.happ.set_state(ComponentState.ERROR)
             finally:
                 self._action_lock.release()
                 self._update_icon()
 
-        threading.Thread(target=do_toggle, name="HappToggle", daemon=True).start()
+        threading.Thread(target=do_toggle, name="VpnToggle", daemon=True).start()
 
     def _schedule_toggle_ag(self):
         """Schedule AG Unlocker toggle in a background thread."""
@@ -532,7 +581,7 @@ class TrayApp:
         logger.info("User action: Enable VPN and Antigravity Unlocker")
         success = self.orchestrator.start_all()
         if not success:
-            logger.error("Happ Suite could not enable every requested component")
+            logger.error("Relay Studio could not enable every requested component")
         self.health_monitor.start()
         self._update_icon()
         return success
@@ -564,7 +613,7 @@ class TrayApp:
         import pystray
 
         self._happ_icon = pystray.Icon(
-            name="HappVPN",
+            name="MihomoVPN",
             icon=_create_icon_image("gray", "V"),
             title="VPN выключен",
             menu=self._build_happ_menu(),
@@ -595,6 +644,13 @@ class TrayApp:
         else:
             logger.error("%s not registered; it may already be used by another application", gemini_key)
 
+        self._dns_hotkey_registered = self._hotkey_dns.start()
+        dns_key = self._hotkey_choices["dns"].label
+        if self._dns_hotkey_registered:
+            logger.info("Global %s hotkey registered (Gemini Web DNS toggle)", dns_key)
+        else:
+            logger.error("%s not registered; it may already be used by another application", dns_key)
+
         # Continue observing externally started components while Suite is idle.
         self.health_monitor.start()
 
@@ -607,6 +663,7 @@ class TrayApp:
         finally:
             self._hotkey_happ.stop()
             self._hotkey_ag.stop()
+            self._hotkey_dns.stop()
             self.health_monitor.stop()
             for icon in self._icons:
                 try:

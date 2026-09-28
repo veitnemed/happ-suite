@@ -14,22 +14,25 @@ import webbrowser
 from tkinter import ttk
 
 import requests
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 try:
     from .core import ComponentState
     from .hotkey import HotkeyChoice, MOD_ALT, MOD_CONTROL, MOD_SHIFT, VK_F8, VK_F9
-    from .happ_ipc import HappIpcClient
-    from .official_installers import HAPP, AG_UNLOCKER, download, run_installer
+    from .official_installers import AG_UNLOCKER, download, run_installer
     from .mihomo_installer import install_mihomo
+    from .node_region import country_hint
+    from .windows_elevation import is_admin
     from .autostart import is_enabled as autostart_enabled, set_enabled as set_autostart
     from .gemini_dns import DnsManager, apply_action, XBOX_DNS
     from .vpn_backend import NetworkUnavailableError, ProviderFormatError, SubscriptionError
 except ImportError:
     from core import ComponentState
     from hotkey import HotkeyChoice, MOD_ALT, MOD_CONTROL, MOD_SHIFT, VK_F8, VK_F9
-    from happ_ipc import HappIpcClient
-    from official_installers import HAPP, AG_UNLOCKER, download, run_installer
+    from official_installers import AG_UNLOCKER, download, run_installer
     from mihomo_installer import install_mihomo
+    from node_region import country_hint
+    from windows_elevation import is_admin
     from autostart import is_enabled as autostart_enabled, set_enabled as set_autostart
     from gemini_dns import DnsManager, apply_action, XBOX_DNS
     from vpn_backend import NetworkUnavailableError, ProviderFormatError, SubscriptionError
@@ -73,6 +76,7 @@ class Dashboard:
         self._dns_status = None
         self._dns_error = ""
         self._next_dns_refresh = 0.0
+        self._best_busy = False
         try:
             self.ui_scale = max(1.0, min(float(root.winfo_fpixels("1i")) / 96.0, 2.0))
         except tk.TclError:
@@ -112,72 +116,88 @@ class Dashboard:
 
     def _build(self):
         root = self.root
-        root.title("Happ Suite")
+        root.title("Relay Studio")
         root.configure(bg=BG)
-        app_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
-        icon_path = app_root / "assets" / "happ-suite.ico"
-        if icon_path.is_file():
-            try:
-                root.iconbitmap(default=str(icon_path))
-            except tk.TclError:
-                pass
+        icon = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(icon)
+        draw.rounded_rectangle((2, 2, 62, 62), radius=18, fill=GREEN)
+        try:
+            font = ImageFont.truetype(r"C:\Windows\Fonts\segoeuib.ttf", 22)
+        except OSError:
+            font = ImageFont.load_default()
+        draw.text((32, 32), "GPT", fill=BG, anchor="mm", font=font)
+        self._window_icon = ImageTk.PhotoImage(icon, master=root)
+        root.iconphoto(True, self._window_icon)
         screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
-        width = max(self._px(520), min(self._px(920), screen_w - self._px(64)))
-        height = max(self._px(500), min(self._px(690), screen_h - self._px(72)))
+        width = min(self._px(1040), screen_w - self._px(48))
+        height = min(self._px(730), screen_h - self._px(64))
         root.geometry(f"{width}x{height}")
-        root.minsize(min(self._px(720), width), min(self._px(600), height))
+        root.minsize(min(self._px(860), width), min(self._px(620), height))
         root.protocol("WM_DELETE_WINDOW", root.withdraw)
         style = ttk.Style(root)
+        # The native Windows combobox ignores most dark palette settings.
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
         style.configure("Suite.TCombobox", fieldbackground=FIELD, background=FIELD,
                         foreground=TEXT, arrowcolor=MUTED, bordercolor=LINE,
                         lightcolor=LINE, darkcolor=LINE, padding=self._px(7),
                         font=(FONT, 9))
         style.map("Suite.TCombobox", fieldbackground=[("readonly", FIELD)],
-                  foreground=[("readonly", TEXT)])
+                  foreground=[("readonly", TEXT)],
+                  background=[("readonly", FIELD)],
+                  arrowcolor=[("readonly", GREEN)])
+        root.option_add("*TCombobox*Listbox.background", FIELD)
+        root.option_add("*TCombobox*Listbox.foreground", TEXT)
+        root.option_add("*TCombobox*Listbox.selectBackground", "#263545")
+        root.option_add("*TCombobox*Listbox.selectForeground", TEXT)
+        root.option_add("*TCombobox*Listbox.font", (FONT, 10))
 
-        content = tk.Frame(root, bg=BG, padx=self._px(28), pady=self._px(22))
+        content = tk.Frame(root, bg=BG, padx=self._px(24), pady=self._px(20))
         content.pack(fill="both", expand=True)
         header = tk.Frame(content, bg=BG)
         header.pack(fill="x")
         brand = tk.Frame(header, bg=BG)
         brand.pack(side="left", fill="x", expand=True)
-        mark = tk.Canvas(brand, width=self._px(44), height=self._px(44), bg=BG,
+        mark = tk.Canvas(brand, width=self._px(48), height=self._px(48), bg=BG,
                          bd=0, highlightthickness=0)
         mark.pack(side="left", padx=(0, self._px(12)))
         self._draw_logo(mark)
         title_group = tk.Frame(brand, bg=BG)
         title_group.pack(side="left", anchor="center")
-        self._label(title_group, "Happ Suite", size=19, weight="bold").pack(anchor="w")
-        self._label(title_group, "SECURE ACCESS  ·  SYSTEM CONTROL", size=8,
+        self._label(title_group, "Relay Studio", size=19, weight="bold").pack(anchor="w")
+        self._label(title_group, "GPT  /  GEMINI  /  SECURE ACCESS", size=8,
                     color=MUTED, weight="bold").pack(anchor="w", pady=(1, 0))
-        self._button(header, "Свернуть", root.withdraw, width=11).pack(side="right", anchor="center")
+        self._button(header, "Скрыть в трей", root.withdraw, width=15).pack(side="right", anchor="center")
 
-        tabs = tk.Frame(content, bg=BG)
-        tabs.pack(fill="x", pady=(self._px(20), self._px(16)))
-        self._nav_button(tabs, "control", "Обзор")
-        self._nav_button(tabs, "settings", "Настройки")
-        self.pages = {
-            "control": tk.Frame(content, bg=BG),
-            "settings": tk.Frame(content, bg=BG),
-        }
-        control = self.pages["control"]
-        settings = self.pages["settings"]
+        body = tk.Frame(content, bg=BG)
+        body.pack(fill="both", expand=True, pady=(self._px(20), 0))
+        sidebar = tk.Frame(body, bg=CARD, width=self._px(238), padx=self._px(14), pady=self._px(17),
+                           highlightthickness=1, highlightbackground=LINE)
+        sidebar.pack(side="left", fill="y", padx=(0, self._px(16)))
+        sidebar.pack_propagate(False)
+        self._label(sidebar, "СОСТОЯНИЕ", size=8, color=MUTED, weight="bold", bg=CARD).pack(
+            anchor="w", padx=self._px(7), pady=(0, self._px(12)))
+        self._nav_buttons = {}
+        self.mode_status = {}
+        self._nav_button(sidebar, "vpn", "VPN", "Mihomo · защищённый маршрут", "V", GREEN)
+        self._nav_button(sidebar, "google", "Gemini + Antigravity", "DNS и relay · независимо", "G", BLUE)
+        tk.Frame(sidebar, bg=LINE, height=1).pack(fill="x", pady=(self._px(20), self._px(12)))
+        self._nav_button(sidebar, "settings", "Настройки", "Клавиши · автозапуск", "⚙", MUTED)
+        self._label(sidebar, "Режимы управляются отдельно.", size=8, color=MUTED,
+                    bg=CARD, wraplength=self._px(190), justify="left").pack(side="bottom", anchor="w", padx=self._px(7))
 
+        workspace = tk.Frame(body, bg=BG)
+        workspace.pack(side="left", fill="both", expand=True)
+        self.pages = {name: tk.Frame(workspace, bg=BG) for name in ("vpn", "google", "settings")}
+        vpn, google, settings = (self.pages[name] for name in ("vpn", "google", "settings"))
         self.cards = {}
-        self._label(control, "Подключение", size=10, color=MUTED, weight="bold").pack(
-            anchor="w", pady=(0, self._px(8)))
-        self._card(control, "happ", "Mihomo VPN", "Зашифрованное соединение через выбранный узел",
-                   lambda: self.tray._schedule_toggle_happ(), hero=True)
 
-        secondary = tk.Frame(control, bg=BG)
-        secondary.pack(fill="x", pady=(self._px(12), self._px(12)))
-        self._card(secondary, "ag", "Antigravity", "Локальный ретранслятор",
-                   lambda: self.tray._schedule_toggle_ag(), compact=True)
-        self._card(secondary, "gemini", "Gemini Web", "DNS и доступность сайта",
-                   self._toggle_gemini_dns, toggle=False, compact=True)
+        self._page_heading(vpn, "01 / ЗАЩИЩЁННОЕ СОЕДИНЕНИЕ", "VPN", "Mihomo подключает выбранный узел подписки.")
+        self._card(vpn, "vpn", "Туннель VPN", "Маршрут и внешний HTTPS проверяются при подключении.",
+                   self.tray._schedule_toggle_happ, hero=True)
 
-        subscription = tk.Frame(control, bg=CARD, highlightthickness=1,
-                                highlightbackground=LINE, padx=self._px(16), pady=self._px(12))
+        subscription = tk.Frame(vpn, bg=CARD, highlightthickness=1,
+                                highlightbackground=LINE, padx=self._px(18), pady=self._px(15))
         subscription.pack(fill="x")
         heading = tk.Frame(subscription, bg=CARD)
         heading.pack(fill="x", pady=(0, self._px(8)))
@@ -195,30 +215,49 @@ class Dashboard:
         self.subscription_visibility = self._button(row, "Скрыть", self._reveal_subscription, width=9)
         self.subscription_visibility.pack(side="left", padx=(self._px(8), 0))
         self._button(row, "Сохранить", self._import_subscription, filled=True, width=11).pack(side="left", padx=(self._px(8), 0))
+        self._label(subscription, "УЗЕЛ ПОДПИСКИ", size=8, color=MUTED, weight="bold", bg=CARD).pack(
+            anchor="w", pady=(self._px(16), self._px(7)))
         node_row = tk.Frame(subscription, bg=CARD)
-        node_row.pack(fill="x", pady=(self._px(9), 0))
+        node_row.pack(fill="x")
         self.vpn_node = ttk.Combobox(node_row, state="readonly", style="Suite.TCombobox", width=34)
         self.vpn_node.pack(side="left", fill="x", expand=True)
+        self.vpn_node.bind("<<ComboboxSelected>>", lambda _event: self._select_vpn_node())
         self._button(node_row, "Обновить узлы", self._refresh_vpn_nodes, width=14).pack(side="left", padx=(self._px(8), 0))
-        self._button(node_row, "Выбрать", self._select_vpn_node, width=10).pack(side="left", padx=(self._px(6), 0))
-        self._button(node_row, "Лучший", self._choose_best_vpn_node, width=9).pack(side="left", padx=(self._px(6), 0))
+        self.best_button = self._button(vpn, "Выбрать лучший зарубежный VPN", self._choose_best_vpn_node,
+                                        filled=True, width=31)
+        self.best_button.pack(side="bottom", anchor="e", pady=(self._px(15), 0))
+
+        self._page_heading(google, "02 / GOOGLE WORKSPACE", "Gemini + Antigravity",
+                           "Два отдельных переключателя для сайта и рабочей сессии.")
+        self._card(google, "gemini", "Gemini Web DNS", "Проверяю текущие настройки…",
+                   self._toggle_gemini_dns)
+        actions = tk.Frame(google, bg=BG)
+        actions.pack(fill="x", pady=(self._px(10), self._px(17)))
+        self._button(actions, "Проверить сайт", self._check_gemini_now, width=16).pack(side="left")
+        self._button(actions, "Открыть Gemini", self._open_gemini, width=17).pack(side="left", padx=(self._px(8), 0))
+        self._card(google, "ag", "Antigravity relay", "Запускается и выключается независимо от VPN и DNS.",
+                   self.tray._schedule_toggle_ag)
+        self._info_panel(google, "ДВА РЕЖИМА", "Gemini Web управляет DNS текущей сети. Antigravity запускает локальный relay. Их состояние проверяется отдельно.")
+
+        self._page_heading(settings, "03 / ПЕРСОНАЛИЗАЦИЯ", "Настройки", "Горячие клавиши и запуск вместе с Windows.")
 
         keys = tk.Frame(settings, bg=CARD, highlightthickness=1,
                         highlightbackground=LINE, padx=self._px(18), pady=self._px(15))
         keys.pack(fill="x", pady=(0, self._px(10)))
         self._label(keys, "Горячие клавиши", size=11, weight="bold", bg=CARD).pack(anchor="w")
-        self._label(keys, "Быстрый доступ к основным действиям Suite.", size=9,
+        self._label(keys, "Отдельная клавиша для каждого режима.", size=9,
                     color=MUTED, bg=CARD).pack(anchor="w", pady=(2, self._px(5)))
         self.key_labels = {}
-        for component, title in (("happ", "VPN"), ("gemini", "Antigravity")):
+        for component, title in (("happ", "VPN"), ("dns", "Gemini Web"), ("gemini", "Antigravity")):
             row = tk.Frame(keys, bg=CARD)
             row.pack(fill="x", pady=(self._px(7), 0))
             self._label(row, title, bg=CARD, width=15, anchor="w").pack(side="left")
             current = self._label(row, "", color=BLUE, bg=CARD, width=16, anchor="w")
             current.pack(side="left")
             self.key_labels[component] = current
-            presets = ("Ctrl+Alt+H", "Ctrl+Shift+H", "F8") if component == "happ" else (
-                "Ctrl+Alt+G", "Ctrl+Shift+G", "F9")
+            presets = {"happ": ("Ctrl+Alt+H", "Ctrl+Shift+H", "F8"),
+                       "dns": ("Ctrl+Alt+D", "Ctrl+Shift+D", "F10"),
+                       "gemini": ("Ctrl+Alt+G", "Ctrl+Shift+G", "F9")}[component]
             choice = ttk.Combobox(row, values=presets, state="readonly", style="Suite.TCombobox", width=17)
             choice.set("Выбрать сочетание")
             choice.pack(side="left", padx=(4, 7))
@@ -236,8 +275,6 @@ class Dashboard:
         bottom = tk.Frame(install, bg=CARD)
         bottom.pack(fill="x")
         self._button(bottom, "Установить Mihomo", self._install_mihomo, filled=True, width=18).pack(side="left")
-        if self.variant == "setup":
-            self._button(bottom, "HAPP · совместимость", lambda: self._install(HAPP), width=20).pack(side="left", padx=(self._px(8), 0))
         self._button(bottom, "Установить AG", lambda: self._install(AG_UNLOCKER), width=16).pack(side="left", padx=(self._px(8), 0))
         self.autostart = tk.BooleanVar(value=autostart_enabled())
         tk.Checkbutton(settings, text="Запускать с Windows после входа в систему",
@@ -247,39 +284,42 @@ class Dashboard:
                        highlightthickness=0).pack(anchor="w", pady=(self._px(12), 0))
         self._button(settings, "Открыть журнал", self._open_log, width=17).pack(
             anchor="w", pady=(self._px(8), 0))
-        self._label(settings,
-                    "Gemini Web: Xbox DNS " + " / ".join(XBOX_DNS["ipv4"]) +
-                    ".\nПрименяется к текущему Wi-Fi/Ethernet и сохраняется после выхода.\n"
-                    "Кнопка «Вернуть DNS» восстановит прежние настройки.\n"
-                    "При смене сети сначала верните DNS предыдущего подключения.\n"
-                    "VPN и безопасный DNS браузера могут использовать другие серверы.",
-                    size=9, color=MUTED, justify="left", wraplength=self._px(820)).pack(anchor="w", pady=(self._px(12), 0))
+        self._label(settings, "DNS: " + " / ".join(XBOX_DNS["ipv4"]) +
+                    ". Вернуть прежние настройки можно на странице Gemini Web.",
+                    size=9, color=MUTED, justify="left", wraplength=self._px(690)).pack(anchor="w", pady=(self._px(12), 0))
         footer = tk.Frame(content, bg=BG)
         footer.pack(side="bottom", fill="x", pady=(self._px(10), 0))
         tk.Frame(footer, bg=LINE, height=1).pack(fill="x", pady=(0, self._px(8)))
         self.message = self._label(footer, "Готово к работе", size=9, color=MUTED,
                                    anchor="w", justify="left", wraplength=self._px(710))
         self.message.pack(side="left", fill="x", expand=True)
-        self._label(footer, "HAPP SUITE  /  WINDOWS", size=8, color="#637283", weight="bold").pack(side="right")
-        self._show_page("control")
+        self._label(footer, "RELAY STUDIO  /  WINDOWS", size=8, color="#637283", weight="bold").pack(side="right")
+        self._show_page("vpn")
 
     def _draw_logo(self, canvas):
         s = self._px
-        canvas.create_oval(s(2), s(2), s(42), s(42), fill=CARD_RAISED, outline=LINE, width=s(1))
-        canvas.create_oval(s(8), s(8), s(36), s(36), fill=BG, outline="#314758", width=s(1))
-        canvas.create_line(s(15), s(28), s(15), s(16), fill=GREEN, width=s(3), capstyle="round")
-        canvas.create_line(s(29), s(28), s(29), s(16), fill=BLUE, width=s(3), capstyle="round")
-        canvas.create_line(s(15), s(22), s(29), s(22), fill=GREEN, width=s(3), capstyle="round")
-        canvas.create_oval(s(20), s(19), s(24), s(23), fill=TEXT, outline="")
+        canvas.create_oval(s(1), s(1), s(47), s(47), fill=GREEN, outline="")
+        canvas.create_text(s(24), s(24), text="GPT", fill=BG, font=(FONT, 12, "bold"))
 
-    def _nav_button(self, parent, page, title):
-        button = tk.Button(parent, text=title, command=lambda: self._show_page(page),
-                           font=(FONT, 9, "bold"), relief="flat", bd=0, cursor="hand2",
-                           padx=self._px(16), pady=self._px(8), highlightthickness=0,
-                           bg=FIELD, fg=MUTED, activebackground=CARD_RAISED,
-                           activeforeground=TEXT)
-        button.pack(side="left", padx=(0, self._px(7)))
-        self._nav_buttons[page] = button
+    def _nav_button(self, parent, page, title, subtitle, symbol, accent):
+        frame = tk.Frame(parent, bg=CARD_RAISED, padx=self._px(10), pady=self._px(10),
+                         cursor="hand2", highlightthickness=1, highlightbackground=LINE)
+        frame.pack(fill="x", pady=(0, self._px(8)))
+        badge = tk.Label(frame, text=symbol, fg=accent, bg=FIELD, width=3,
+                         font=(FONT, 12, "bold"), pady=self._px(6), cursor="hand2")
+        badge.pack(side="left", padx=(0, self._px(9)))
+        labels = tk.Frame(frame, bg=CARD_RAISED, cursor="hand2")
+        labels.pack(side="left", fill="x", expand=True)
+        heading = self._label(labels, title, size=10, weight="bold", bg=CARD_RAISED, cursor="hand2")
+        heading.pack(anchor="w")
+        detail = self._label(labels, subtitle, size=8, color=MUTED, bg=CARD_RAISED,
+                             cursor="hand2", wraplength=self._px(150), justify="left")
+        detail.pack(anchor="w", pady=(self._px(2), 0))
+        for widget in (frame, badge, labels, heading, detail):
+            widget.bind("<Button-1>", lambda _event, name=page: self._show_page(name))
+        self._nav_buttons[page] = frame
+        if page != "settings":
+            self.mode_status[page] = detail
 
     def _show_page(self, name: str):
         for page in self.pages.values():
@@ -287,10 +327,21 @@ class Dashboard:
         self.pages[name].pack(fill="both", expand=True)
         for page, button in self._nav_buttons.items():
             active = page == name
-            button.configure(bg=CARD_RAISED if active else FIELD,
-                             fg=TEXT if active else MUTED,
-                             highlightthickness=1 if active else 0,
-                             highlightbackground=LINE)
+            button.configure(highlightbackground=GREEN if active else LINE)
+
+    def _page_heading(self, parent, eyebrow: str, title: str, description: str):
+        self._label(parent, eyebrow, size=8, color=GREEN, weight="bold").pack(anchor="w")
+        self._label(parent, title, size=23, weight="bold").pack(anchor="w", pady=(self._px(5), 0))
+        self._label(parent, description, size=9, color=MUTED, wraplength=self._px(690),
+                    justify="left").pack(anchor="w", pady=(self._px(3), self._px(18)))
+
+    def _info_panel(self, parent, title: str, description: str):
+        frame = tk.Frame(parent, bg=CARD, padx=self._px(18), pady=self._px(15),
+                         highlightthickness=1, highlightbackground=LINE)
+        frame.pack(fill="x", pady=(self._px(14), 0))
+        self._label(frame, title, size=8, color=GREEN, weight="bold", bg=CARD).pack(anchor="w")
+        self._label(frame, description, size=9, color=MUTED, bg=CARD,
+                    wraplength=self._px(650), justify="left").pack(anchor="w", pady=(self._px(6), 0))
 
     def _card(self, parent, key, title, description, action, *, toggle=True,
               hero=False, compact=False):
@@ -315,7 +366,7 @@ class Dashboard:
         button.pack(side="right")
         detail = self._label(frame, description, size=9, color=MUTED,
                              bg=CARD_RAISED if hero else CARD, justify="left",
-                             wraplength=self._px(760 if hero else 320))
+                             wraplength=self._px(650))
         detail.pack(anchor="w", padx=(self._px(20), 0), pady=(self._px(5), 0))
         if hero:
             self._label(frame, "MIHOMO  ·  TUN  ·  СКВОЗНОЕ ШИФРОВАНИЕ",
@@ -339,24 +390,20 @@ class Dashboard:
             return
 
         self.set_message("Проверяю подписку… ссылка останется в поле")
-        logger.info("Subscription save requested; backend=%s", self.config.vpn_backend)
+        logger.info("Mihomo subscription save requested")
 
         def worker():
             try:
-                if self.config.vpn_backend == "happ":
-                    HappIpcClient(self.config.happ_exe).import_subscription_url(url)
-                    self.root.after(0, lambda: self._subscription_saved("Ссылка передана в HAPP."))
-                else:
-                    result = self.tray.orchestrator.vpn.set_subscription_url(url)
-                    names = [node["name"] for node in result.nodes]
-                    logger.info("Subscription saved; nodes=%d; provider_limit_warning=%s; fallback=%s",
-                                len(names), result.device_limit_warning, result.used_mihomo_suffix)
-                    self.root.after(0, lambda: self.vpn_node.configure(values=names))
-                    warning = (" Провайдер сообщил о лимите устройств; подключение ещё нужно проверить."
-                               if result.device_limit_warning else " Нажмите «Включить».")
-                    self.root.after(0, lambda: self._subscription_saved(
-                        f"Подписка проверена: загружено узлов {len(names)}.{warning}"
-                    ))
+                result = self.tray.orchestrator.vpn.set_subscription_url(url)
+                names = [node["name"] for node in result.nodes]
+                logger.info("Subscription saved; nodes=%d; provider_limit_warning=%s; fallback=%s",
+                            len(names), result.device_limit_warning, result.used_mihomo_suffix)
+                self.root.after(0, lambda: self.vpn_node.configure(values=names))
+                warning = (" Провайдер сообщил о лимите устройств; подключение ещё нужно проверить."
+                           if result.device_limit_warning else " Нажмите «Включить».")
+                self.root.after(0, lambda: self._subscription_saved(
+                    f"Подписка проверена: загружено узлов {len(names)}.{warning}"
+                ))
             except ProviderFormatError as exc:
                 logger.warning("Subscription format rejected: %s", exc)
                 self.set_message(str(exc))
@@ -369,7 +416,7 @@ class Dashboard:
             except Exception as exc:
                 logger.error("Subscription save failed: %s", type(exc).__name__)
                 self.set_message("Не удалось сохранить ссылку. Откройте журнал в настройках.")
-        threading.Thread(target=worker, name="ImportHappSubscription", daemon=True).start()
+        threading.Thread(target=worker, name="ImportMihomoSubscription", daemon=True).start()
 
     def _subscription_saved(self, message: str):
         self.set_message(message)
@@ -392,20 +439,17 @@ class Dashboard:
         threading.Thread(target=worker, name="InstallMihomo", daemon=True).start()
 
     def _choose_preset(self, component: str, label: str):
-        key = ord("H" if component == "happ" else "G")
+        key = ord({"happ": "H", "dns": "D", "gemini": "G"}[component])
         if label.startswith("Ctrl+Alt+"):
             choice = HotkeyChoice(key, MOD_CONTROL | MOD_ALT)
         elif label.startswith("Ctrl+Shift+"):
             choice = HotkeyChoice(key, MOD_CONTROL | MOD_SHIFT)
         else:
-            choice = HotkeyChoice(VK_F8 if component == "happ" else VK_F9)
+            choice = HotkeyChoice({"happ": VK_F8, "dns": 0x79, "gemini": VK_F9}[component])
         self.tray._set_shortcut(component, choice)
-        self.set_message(f"Shortcut assigned: {choice.label}")
+        self.set_message(f"Назначена клавиша: {choice.label}")
 
     def _refresh_vpn_nodes(self):
-        if self.config.vpn_backend != "mihomo":
-            self.set_message("Выбор узла доступен в режиме Mihomo.")
-            return
         def worker():
             try:
                 nodes = self.tray.orchestrator.vpn.update_nodes()
@@ -420,7 +464,7 @@ class Dashboard:
     def _select_vpn_node(self):
         name = self.vpn_node.get().strip()
         if not name:
-            self.set_message("Choose a node first.")
+            self.set_message("Сначала выберите узел")
             return
         def worker():
             try:
@@ -431,15 +475,45 @@ class Dashboard:
         threading.Thread(target=worker, name="SelectMihomoNode", daemon=True).start()
 
     def _choose_best_vpn_node(self):
+        if self._best_busy:
+            return
+        self._best_busy = True
+        self.best_button.configure(state="disabled", text="Проверяю узлы…")
         def worker():
             try:
-                name = self.tray.orchestrator.vpn.choose_best_node()
-                if name:
-                    self.root.after(0, lambda: self.vpn_node.set(name))
-                    self.set_message(f"Выбран лучший узел: {name}")
+                vpn = self.tray.orchestrator.vpn
+                if not vpn.read_status(with_external_probe=False).connected:
+                    nodes = vpn.provider_nodes()
+                    first = next((node["name"] for node in nodes
+                                  if country_hint(node["name"]) not in (None, "RU")), None)
+                    if not first:
+                        raise NetworkUnavailableError("В подписке нет узлов с указанной зарубежной страной")
+                    vpn.select_node(first)
+                    vpn.last_error = None
+                    self.set_message("Подключаю зарубежный узел; затем сравню доступные узлы…")
+                    self.root.after(0, lambda: self.tray._schedule_toggle_happ(best_foreign=True))
+                    if not is_admin():
+                        self.set_message("Подтвердите UAC: выбор узла продолжится после запуска Relay Studio.")
+                        return
+                    deadline = time.monotonic() + 150
+                    while time.monotonic() < deadline:
+                        if vpn.read_status(with_external_probe=False).connected:
+                            break
+                        if vpn.state == ComponentState.ERROR or vpn.last_error:
+                            raise NetworkUnavailableError(vpn.last_error or "VPN не подключился")
+                        time.sleep(1)
+                    else:
+                        raise NetworkUnavailableError("VPN не подключился за отведённое время")
+                name = vpn.choose_best_foreign_node(progress=self.set_message)
+                self.root.after(0, lambda: self.vpn_node.set(name))
+                self.set_message(f"Выбран зарубежный узел: {name}. Выход: {vpn.last_exit_country}.")
             except Exception as exc:
                 self.set_message(str(exc) if isinstance(exc, (NetworkUnavailableError, ProviderFormatError, SubscriptionError))
                                  else f"Не удалось проверить узлы: {type(exc).__name__}")
+            finally:
+                self._best_busy = False
+                self.root.after(0, lambda: self.best_button.configure(
+                    state="normal", text="Выбрать лучший зарубежный VPN"))
         threading.Thread(target=worker, name="ChooseBestMihomoNode", daemon=True).start()
     def _capture_key(self, component: str):
         self.tray._capture_shortcut(component)
@@ -509,6 +583,7 @@ class Dashboard:
 
     def _toggle_gemini_dns(self):
         if self._dns_busy or self._dns_refreshing or self._dns_status is None or self._dns_error:
+            self.set_message("DNS ещё проверяется. Повторите переключение через несколько секунд.")
             return
         action = "disable" if self._dns_status["managed"] else "enable"
         self._dns_busy = True
@@ -518,12 +593,14 @@ class Dashboard:
             try:
                 result = apply_action(action)
                 self.set_message(result["message"])
+                self.tray._notify(self.tray._notification_icon("gemini"), result["message"], "Gemini Web DNS")
                 self._dns_status = DnsManager().status()
                 self.gemini_site_status = "Сайт ещё не проверен"
                 if action == "enable":
                     self._check_gemini_now()
             except Exception as exc:
                 self.set_message(str(exc))
+                self.tray._notify(self.tray._notification_icon("gemini"), str(exc), "Gemini Web — ошибка")
             finally:
                 self._dns_busy = False
                 self._next_dns_refresh = 0
@@ -539,7 +616,7 @@ class Dashboard:
             ComponentState.STOPPED: MUTED,
         }
         for key, state, off_detail, on_detail in (
-            ("happ", self.tray.orchestrator.happ.state, "VPN выключен", "VPN подключён"),
+            ("vpn", self.tray.orchestrator.vpn.state, "VPN выключен", "VPN подключён"),
             ("ag", self.tray.orchestrator.ag_unlocker.state, "Relay выключен", "Relay работает"),
         ):
             dot, detail, button = self.cards[key]
@@ -548,7 +625,7 @@ class Dashboard:
                              off_detail if state == ComponentState.STOPPED else
                              "Подключение…" if state in (ComponentState.STARTING, ComponentState.STOPPING) else
                              "Ожидает подтверждения" if state == ComponentState.DEGRADED else "Ошибка")
-            if state == ComponentState.ERROR and key == "happ":
+            if state == ComponentState.ERROR and key == "vpn":
                 vpn_error = getattr(self.tray.orchestrator.vpn, "last_error", None)
                 if vpn_error:
                     detail.configure(text=vpn_error)
@@ -568,6 +645,21 @@ class Dashboard:
         dot.itemconfigure(1, fill=YELLOW if self._dns_busy else color)
         button.configure(text="Подождите…" if self._dns_busy else "Вернуть DNS" if status and status["managed"] else "Включить DNS",
                          state="disabled" if self._dns_busy or self._dns_refreshing or status is None or self._dns_error else "normal")
+        vpn_state = self.tray.orchestrator.vpn.state
+        ag_state = self.tray.orchestrator.ag_unlocker.state
+        self.mode_status["vpn"].configure(text={
+            ComponentState.RUNNING: "Подключён",
+            ComponentState.STOPPED: "Выключен",
+            ComponentState.ERROR: "Ошибка подключения",
+        }.get(vpn_state, "Подключение…"), fg=palette.get(vpn_state, MUTED))
+        dns_text = "DNS: проверка" if status is None else (
+            "DNS включён" if status["managed"] else "DNS выключен")
+        ag_text = "relay работает" if ag_state == ComponentState.RUNNING else (
+            "relay выключен" if ag_state == ComponentState.STOPPED else "relay: проверка")
+        self.mode_status["google"].configure(
+            text=f"{dns_text} · {ag_text}",
+            fg=RED if self._dns_error or ag_state == ComponentState.ERROR else
+               GREEN if status and status["managed"] and ag_state == ComponentState.RUNNING else MUTED)
         for key, widget in self.key_labels.items():
             widget.configure(text=self.tray._hotkey_choices[key].label)
         self.root.after(1000, self._refresh)

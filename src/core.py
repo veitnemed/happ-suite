@@ -3,12 +3,11 @@ Core orchestrator — manages lifecycle of all bypass components.
 
 Components:
   1. Zapret (winws.exe) — DPI bypass for YouTube/Discord
-  2. Happ VPN (Happ.exe → happd.exe → xray.exe) — VPN tunnel
+  2. Mihomo — VPN tunnel
   3. AG Unlocker (ag_dns.exe) — Gemini DNS proxy
 
 Design:
-  - HAPP is launched with a pre-creation SW_HIDE startup hint; GUI applications
-    may ignore it, so an invisible launch is not guaranteed or verified.
+  - The VPN process is launched without a visible console.
   - Process health is monitored via TCP port checks, not process polling.
   - Components can be started/stopped independently or all at once.
 """
@@ -27,11 +26,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 try:
     from .app_config import Config
-    from .happ_controller import HappController
     from .ag_unlocker import ensure_dns_relay, stop_dns_relay, read_gate_readiness, probe_model_response
 except (ImportError, ValueError):
     from app_config import Config
-    from happ_controller import HappController
     from ag_unlocker import ensure_dns_relay, stop_dns_relay, read_gate_readiness, probe_model_response
 
 logger = logging.getLogger("happ_suite.core")
@@ -326,164 +323,6 @@ class ZapretComponent(Component):
             return False
 
 
-# ─── Happ VPN Component ───────────────────────────────────────
-
-class HappVPNComponent(Component):
-    """Manages Happ.exe → happd.exe → xray.exe VPN tunnel."""
-
-    def __init__(self, config: Config):
-        super().__init__("Happ VPN")
-        self.config = config
-        self.controller = HappController(config.happ_exe, config.tunnel_wait_timeout)
-        self.cancel_requested = threading.Event()
-
-    def is_running(self) -> bool:
-        """Require a HAPP-owned system route and a direct external response."""
-        return self.controller.read_status().connected
-
-    def is_happ_process_alive(self) -> bool:
-        """Check if Happ.exe process exists."""
-        try:
-            import psutil
-            for proc in psutil.process_iter(["name"]):
-                if proc.info["name"] and proc.info["name"].lower() == "happ.exe":
-                    return True
-        except Exception:
-            pass
-        return False
-
-    def can_recover(self) -> bool:
-        """Recovery belongs to the independent bridge, not this monitor."""
-        return False
-
-    def _write_server_to_registry(self, server: Dict):
-        """Refuse undocumented registry control rather than changing user settings."""
-        logger.error("HAPP server selection through registry is undocumented; preferences were not changed")
-        return False
-
-    def get_status(self) -> Dict[str, object]:
-        """Report route and external reachability as separate observations."""
-        observed = self.controller.read_status()
-        return {
-            "state": self.state.value,
-            "happ_process_alive": observed.gui_pid is not None,
-            "happ_pid": observed.gui_pid,
-            "proxy_responsive": is_port_open("127.0.0.1", self.config.proxy_port),
-            "tunnel_verified": observed.connected,
-            "route_interface": observed.route.interface_alias,
-            "external_ok": observed.external_ok,
-            "active_profile_id": observed.active_profile_id,
-        }
-
-    def get_servers(self) -> List[Dict]:
-        return self.controller.list_profiles()
-
-    def start(self, server: Optional[Dict] = None) -> bool:
-        """Connect the profile already selected in HAPP through its existing GUI."""
-        self.request_enabled(True)
-        if server is not None:
-            logger.error("HAPP profile selection is not verified; static config IDs are ignored")
-            self.set_state(ComponentState.ERROR)
-            return False
-        if self.cancel_requested.is_set():
-            self.set_state(ComponentState.STOPPED)
-            return False
-        self.set_state(ComponentState.STARTING)
-        try:
-            observed = self.controller.read_status()
-            if observed.connected:
-                if self.ownership == ComponentOwnership.UNKNOWN:
-                    self.ownership = ComponentOwnership.EXTERNAL
-                self.observe(ComponentState.RUNNING)
-                return True
-            if observed.route.through_happ:
-                if self.ownership == ComponentOwnership.UNKNOWN:
-                    self.ownership = ComponentOwnership.EXTERNAL
-                self.observe(ComponentState.DEGRADED)
-                logger.warning("HAPP route is active but unverified; leaving the existing session untouched")
-                return False
-            if observed.gui_pid is None:
-                self.ownership = ComponentOwnership.UNKNOWN
-                logger.error("Existing Happ.exe GUI IPC is unavailable; no second GUI is started")
-                self.set_state(ComponentState.ERROR)
-                return False
-            connected = self.controller.connect_current_profile()
-            if self.cancel_requested.is_set():
-                if connected:
-                    self.ownership = ComponentOwnership.SUITE
-                    self.controller.disconnect()
-                    self.ownership = ComponentOwnership.UNKNOWN
-                    self.observe(ComponentState.STOPPED)
-                else:
-                    self.ownership = ComponentOwnership.UNKNOWN
-                    self.observe(ComponentState.ERROR)
-                return False
-            self.ownership = ComponentOwnership.SUITE if connected else ComponentOwnership.UNKNOWN
-            self.set_state(ComponentState.RUNNING if connected else ComponentState.ERROR)
-            if not connected:
-                logger.error("HAPP accepted connect but TUN route and HTTPS were not verified")
-            return connected
-        except Exception:
-            logger.exception("HAPP connection through existing GUI failed")
-            self.set_state(ComponentState.ERROR)
-            return False
-
-    def stop(self) -> bool:
-        return self.stop_owned()
-
-    def disconnect(self) -> bool:
-        """Disconnect HAPP's tunnel without closing the existing GUI process."""
-        self.request_enabled(False)
-        if self.ownership != ComponentOwnership.SUITE:
-            logger.info("Leaving non-Suite-owned HAPP tunnel untouched")
-            self.set_state(ComponentState.ERROR)
-            return False
-        self.set_state(ComponentState.STOPPING)
-        try:
-            disconnected = self.controller.disconnect()
-            if disconnected:
-                self.ownership = ComponentOwnership.UNKNOWN
-            self.set_state(ComponentState.STOPPED if disconnected else ComponentState.ERROR)
-            if not disconnected:
-                logger.error("HAPP accepted disconnect but the TUN route remained active")
-            return disconnected
-        except Exception:
-            logger.exception("HAPP disconnect through existing GUI failed")
-            self.set_state(ComponentState.ERROR)
-            return False
-
-    def stop_owned(self) -> bool:
-        """Stop a HAPP session only when this Suite instance started it."""
-        self.request_enabled(False)
-        if self.ownership != ComponentOwnership.SUITE:
-            logger.info("HAPP stop requested, but Suite does not own the active session")
-            return True
-        return self.disconnect()
-
-    def switch_server(self, server: Dict) -> bool:
-        """Selection requires a validated live HAPP catalog and command."""
-        return self.start(server)
-
-def _post_close_to_pid(target_pid: int):
-    """Request a normal close from top-level windows owned by one PID."""
-    user32 = ctypes.windll.user32
-    get_pid = user32.GetWindowThreadProcessId
-    post_message = user32.PostMessageW
-    enum_windows = user32.EnumWindows
-    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-    wm_close = 0x0010
-
-    def visit(hwnd, _):
-        pid = ctypes.wintypes.DWORD()
-        get_pid(hwnd, ctypes.byref(pid))
-        if pid.value == target_pid:
-            post_message(hwnd, wm_close, 0, 0)
-        return True
-
-    callback = callback_type(visit)
-    enum_windows(callback, 0)
-
-
 # ─── AG Unlocker Component ────────────────────────────────────
 
 class AGUnlockerComponent(Component):
@@ -580,14 +419,11 @@ class Orchestrator:
     def __init__(self, config: Config):
         self.config = config
         self.zapret = ZapretComponent(config)
-        if getattr(config, "vpn_backend", "mihomo").casefold() == "happ":
-            self.vpn = HappVPNComponent(config)
-        else:
-            try:
-                from .mihomo_backend import MihomoVPNComponent
-            except ImportError:
-                from mihomo_backend import MihomoVPNComponent
-            self.vpn = MihomoVPNComponent(config)
+        try:
+            from .mihomo_backend import MihomoVPNComponent
+        except ImportError:
+            from mihomo_backend import MihomoVPNComponent
+        self.vpn = MihomoVPNComponent(config)
         # Compatibility alias used by the existing tray and dashboard.
         self.happ = self.vpn
         self.ag_unlocker = AGUnlockerComponent(config)
@@ -597,7 +433,7 @@ class Orchestrator:
 
     @property
     def desired_enabled(self) -> bool:
-        """Compatibility view: the legacy global toggle represents HAPP intent."""
+        """Compatibility view of the VPN toggle's desired state."""
         return self.happ.desired_state == DesiredState.ON
 
     @desired_enabled.setter
@@ -643,14 +479,9 @@ class Orchestrator:
                 self.ag_unlocker.set_state(ComponentState.ERROR)
                 unlocker_ok = False
 
-        if isinstance(self.happ, HappVPNComponent):
-            happ_status = self.happ.get_status()
-            route_name = happ_status["route_interface"]
-            verified = happ_status["tunnel_verified"]
-        else:
-            observed = self.happ.read_status()
-            route_name = observed.route.interface_alias
-            verified = observed.connected
+        observed = self.vpn.read_status()
+        route_name = observed.route.interface_alias
+        verified = observed.connected
         logger.info(
             "=== Start complete. VPN route: %s, tunnel verified: %s, AG Unlocker: %s ===",
             route_name,
@@ -660,7 +491,7 @@ class Orchestrator:
         return unlocker_ok and happ_ok
 
     def stop_all(self) -> bool:
-        """Disconnect HAPP and reset only Suite-owned state."""
+        """Disconnect VPN and reset only Suite-owned state."""
         logger.info("=== Stopping all components ===")
         self.happ.cancel_requested.set()
         disconnected = self.happ.stop_owned()
@@ -688,20 +519,20 @@ class Orchestrator:
 
     def _start_happ_only(self) -> bool:
         """Connect Happ VPN without starting AG Unlocker."""
-        logger.info("=== Starting Happ VPN only ===")
+        logger.info("=== Starting selected VPN backend only ===")
         self.happ.cancel_requested.clear()
         self.desired_enabled = True
         ok = self.happ.start()
-        logger.info("=== Happ VPN start: %s ===", "OK" if ok else "FAILED")
+        logger.info("=== VPN start: %s ===", "OK" if ok else "FAILED")
         return ok
 
     def _stop_happ_only(self) -> bool:
         """Disconnect Happ VPN without stopping AG Unlocker."""
-        logger.info("=== Stopping Happ VPN only ===")
+        logger.info("=== Stopping selected VPN backend only ===")
         self.happ.cancel_requested.set()
         disconnected = self.happ.stop_owned()
         self.happ.request_enabled(False)
-        logger.info("=== Happ VPN stop: %s ===", "OK" if disconnected else "FAILED")
+        logger.info("=== VPN stop: %s ===", "OK" if disconnected else "FAILED")
         return disconnected
 
     def toggle_ag_unlocker(self) -> bool:

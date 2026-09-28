@@ -27,6 +27,7 @@ from .mihomo_api import MihomoApi
 from .mihomo_config import RuntimePaths, SecretStore, new_controller_secret, render_config
 from .mihomo_installer import installed_integrity, install_mihomo, sha256_file
 from .mihomo_subscription import SubscriptionClient, SubscriptionResult
+from .node_region import country_hint
 import yaml
 from .vpn_backend import (
     ApiAuthError, ApiUnavailableError, BackendObservation, BinaryIntegrityError,
@@ -438,7 +439,7 @@ class MihomoVPNComponent(Component):
                 existing = self.detect()
                 if existing.state == "running":
                     if existing.ownership == "external":
-                        raise OwnershipConflictError("Обнаружен Mihomo, запущенный вне Happ Suite")
+                        raise OwnershipConflictError("Обнаружен Mihomo, запущенный вне Relay Studio")
                     if existing.ownership == ComponentOwnership.SUITE.value:
                         self._api = self._api_for_record(self._instance)
                         if self.verify():
@@ -523,9 +524,17 @@ class MihomoVPNComponent(Component):
                     self._stop_locked()
                     self.observe(ComponentState.STOPPED)
                     return False
-                raise TunStartTimeout("Не удалось подтвердить TUN, маршрут и HTTPS через Mihomo") from last_error
+                status = self.read_status(with_external_probe=False)
+                if not status.route.through_happ:
+                    reason = "Mihomo запущен, но маршрут Windows через его TUN не появился"
+                elif not status.connected:
+                    reason = "Маршрут Mihomo появился, но его локальный контроллер не отвечает"
+                else:
+                    reason = "TUN и маршрут Mihomo работают, но HTTPS-проверка не прошла; попробуйте другой узел"
+                logger.warning("Mihomo readiness timeout: route=%s api=%s",
+                               status.route.through_happ, status.connected)
+                raise TunStartTimeout(reason) from last_error
             except Exception as exc:
-                logger.warning("Mihomo start failed: %s", type(exc).__name__)
                 public_errors = (
                     SubscriptionError, ProviderFormatError, ApiAuthError,
                     ApiUnavailableError, BinaryIntegrityError, ConfigValidationError,
@@ -533,6 +542,7 @@ class MihomoVPNComponent(Component):
                 )
                 self.last_error = (str(exc) if isinstance(exc, public_errors)
                                    else "Не удалось запустить Mihomo. Подробности сохранены в журнале.")
+                logger.warning("Mihomo start failed: %s: %s", type(exc).__name__, self.last_error)
                 if self.ownership == ComponentOwnership.SUITE:
                     self._stop_locked()
                 else:
@@ -694,3 +704,58 @@ class MihomoVPNComponent(Component):
                 selected = current
         self.select_node(selected)
         return selected
+
+    def choose_best_foreign_node(self, progress=None) -> str:
+        """Pick the quickest labelled foreign node and verify its actual exit country."""
+        api = self._api
+        if not api or not self.read_status(with_external_probe=False).connected:
+            raise NetworkUnavailableError("Сначала подключите Mihomo VPN для проверки узлов")
+        nodes = {node["name"] for node in self.provider_nodes()}
+        if progress:
+            progress("Измеряю задержку узлов подписки…")
+        delays = api.group_delay("VPN")
+        candidates = sorted(
+            (delay, name) for name, delay in delays.items()
+            if name in nodes and delay is not None
+            and (country_hint(name) not in (None, "RU"))
+        )
+        if not candidates:
+            raise NetworkUnavailableError("В подписке нет доступных зарубежных узлов с указанной страной")
+        previous = api.proxies().get("VPN", {}).get("now")
+        selected = None
+        try:
+            for index, (delay, name) in enumerate(candidates, 1):
+                try:
+                    if progress:
+                        progress(f"Проверяю страну выхода: {index} из {len(candidates)}")
+                    api.select_proxy("VPN", name)
+                    time.sleep(0.4)
+                    with requests.Session() as session:
+                        session.trust_env = False
+                        response = session.get("https://www.cloudflare.com/cdn-cgi/trace",
+                                               timeout=(3, 5))
+                    response.raise_for_status()
+                    country = next((line[4:].strip().upper() for line in response.text.splitlines()
+                                    if line.startswith("loc=")), "")
+                    if len(country) != 2 or not country.isalpha() or country == "RU":
+                        logger.info("Foreign node rejected: exit country not confirmed as foreign")
+                        continue
+                    if not self.verify():
+                        logger.info("Foreign node rejected: tunnel or HTTPS not verified")
+                        continue
+                    selected = name
+                    self._last_good_node = name
+                    self._save_last_good_node(name)
+                    self.last_exit_country = country
+                    logger.info("Foreign node selected; delay_ms=%d; exit_country=%s", delay, country)
+                    return name
+                except (ApiUnavailableError, ApiAuthError, ProviderFormatError,
+                        SubscriptionError, requests.RequestException):
+                    logger.info("Foreign node probe failed; trying next candidate")
+            raise NetworkUnavailableError("Не удалось подтвердить зарубежный выход ни одного доступного узла")
+        finally:
+            if selected is None and previous:
+                try:
+                    api.select_proxy("VPN", previous)
+                except (ApiUnavailableError, ApiAuthError, ProviderFormatError, SubscriptionError):
+                    logger.warning("Could not restore prior VPN node after foreign-node search")

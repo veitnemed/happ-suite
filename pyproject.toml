@@ -1,7 +1,7 @@
 [project]
-name = "happ-suite"
-version = "2.2.0"
-description = "Windows dashboard and tray controls for Mihomo VPN and Happ Suite components"
+name = "relay-studio"
+version = "2.3.0"
+description = "Windows controls for Mihomo VPN, Gemini Web DNS and Antigravity"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
@@ -17,7 +17,7 @@ dependencies = [
 test = ["pytest>=8.0"]
 
 [project.scripts]
-happ-suite = "src.main:main"
+relay-studio = "src.start:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

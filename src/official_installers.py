@@ -18,12 +18,6 @@ class Installer:
 
 # Pinned official release assets. The hashes come from each GitHub release's
 # asset digest. Updating versions requires updating both URL and digest.
-HAPP = Installer(
-    "HAPP 4.3.0",
-    "setup-Happ.x64.exe",
-    "https://github.com/Happ-proxy/happ-desktop/releases/download/4.3.0/setup-Happ.x64.exe",
-    "cd2016b398d36fa20956cab083175c1a390b12344d8834f35bd7efce9fe2475c",
-)
 AG_UNLOCKER = Installer(
     "AG Unlocker 2.17.0.3",
     "AG_2.17.0.3.exe",
@@ -51,7 +45,7 @@ def download(installer: Installer, progress=None, destination: Path | None = Non
     if target.is_file() and _sha256(target) == installer.sha256:
         return target
     temporary = target.with_suffix(target.suffix + ".part")
-    request = urllib.request.Request(installer.url, headers={"User-Agent": "HappSuite/2.1"})
+    request = urllib.request.Request(installer.url, headers={"User-Agent": "RelayStudio/2.2"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response, temporary.open("wb") as output:
             total = int(response.headers.get("Content-Length", "0"))

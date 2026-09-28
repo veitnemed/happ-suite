@@ -203,7 +203,7 @@ class DnsManager:
     def disable(self):
         backup = self.backup()
         if not backup:
-            return {"message": "Нет DNS, изменённых Happ Suite", "state": "off", "managed": False}
+            return {"message": "Нет DNS, изменённых Relay Studio", "state": "off", "managed": False}
         adapter = self.saved_adapter(self.backend.snapshot(), backup)
         # A user or another app may have changed DNS since activation. Never
         # overwrite that change as a side effect of clicking our off button.

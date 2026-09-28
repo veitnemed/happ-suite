@@ -2,7 +2,7 @@
 
 The Unlocker installer owns the scheduled task and its DNS/proxy settings. This
 module only starts that existing task; it never installs, reconfigures or stops
-it. No Unlocker GUI or visible console window is launched by Happ Suite.
+it. No Unlocker GUI or visible console window is launched by Relay Studio.
 """
 
 from dataclasses import dataclass
