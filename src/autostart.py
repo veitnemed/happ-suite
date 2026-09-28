@@ -10,9 +10,15 @@ VALUE_NAME = "HappSuite"
 
 
 def _command() -> str:
-    if not getattr(sys, "frozen", False) or Path(sys.executable).name.lower() != "start.exe":
-        raise RuntimeError("Autostart is available in packaged start.exe")
-    return f'"{Path(sys.executable).resolve()}" --background'
+    if getattr(sys, "frozen", False):
+        if Path(sys.executable).name.lower() != "start.exe":
+            raise RuntimeError("Unexpected packaged executable")
+        return f'"{Path(sys.executable).resolve()}" --background'
+    launcher = Path(__file__).resolve().parent.parent / "start.pyw"
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    if not launcher.is_file() or not pythonw.is_file():
+        raise RuntimeError("Source launcher or pythonw.exe is unavailable")
+    return f'"{pythonw}" "{launcher}" --background'
 
 
 def is_enabled() -> bool:
