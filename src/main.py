@@ -28,6 +28,28 @@ logging.basicConfig(
 logger = logging.getLogger("happ_suite")
 
 
+def _single_instance_handle():
+    """Keep one tray/hotkey owner per Windows user session."""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    handle = kernel32.CreateMutexW(None, True, r"Local\HappSuiteTray")
+    if not handle:
+        raise OSError("Cannot create Happ Suite instance mutex")
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        return None
+    return handle
+
+
+def _release_single_instance(handle):
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.ReleaseMutex.argtypes = (ctypes.c_void_p,)
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    kernel32.ReleaseMutex(handle)
+    kernel32.CloseHandle(handle)
+
+
 def is_admin() -> bool:
     """Check if running with admin privileges."""
     try:
@@ -52,6 +74,10 @@ def request_admin_restart():
 
 def main():
     """Main entry point."""
+    mutex = _single_instance_handle()
+    if mutex is None:
+        logger.info("Happ Suite is already running in this Windows session")
+        return
     logger.info("=" * 60)
     logger.info("Happ Suite v2.0 starting...")
     logger.info(f"Admin: {is_admin()}")
@@ -103,6 +129,7 @@ def main():
     finally:
         health_monitor.stop()
         logger.info("Happ Suite stopped")
+        _release_single_instance(mutex)
 
 
 if __name__ == "__main__":

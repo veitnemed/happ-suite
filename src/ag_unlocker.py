@@ -137,6 +137,46 @@ def ensure_dns_relay(timeout_s: float = 5.0) -> RelayStartResult:
         pythoncom.CoUninitialize()
 
 
+def stop_dns_relay(timeout_s: float = 5.0) -> RelayStartResult:
+    """Stop only the installed DNS scheduled task, keeping its registration.
+
+    F9 can start the same task again. This does not remove the installer's NRPT
+    or proxy settings; Antigravity traffic may fail while the relay is stopped.
+    """
+    if os.name != "nt":
+        return RelayStartResult(False, False, "Windows Task Scheduler is required")
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        return RelayStartResult(False, False, "Task Scheduler COM support is unavailable")
+
+    pythoncom.CoInitialize()
+    task = None
+    service = None
+    try:
+        service = win32com.client.Dispatch("Schedule.Service")
+        service.Connect()
+        task = service.GetFolder("\\").GetTask(TASK_NAME)
+        if not _task_is_safe_to_start(task):
+            return RelayStartResult(False, False, "Installed AG Unlocker task differs from the expected relay")
+        if task.State == TASK_STATE_RUNNING:
+            task.Stop(0)
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            if task.State != TASK_STATE_RUNNING and not _relay_listener_open():
+                return RelayStartResult(True, False)
+            if time.monotonic() >= deadline:
+                return RelayStartResult(False, False, "AG Unlocker task or listener did not stop")
+            time.sleep(0.25)
+    except Exception as exc:
+        return RelayStartResult(False, False, f"Task Scheduler error: {type(exc).__name__}")
+    finally:
+        task = None
+        service = None
+        pythoncom.CoUninitialize()
+
+
 def _gate_path() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
@@ -214,7 +254,7 @@ def probe_model_response(
         return ModelProbeResult(False, "AG Unlocker listener is not running")
 
     before = read_gate_readiness(time.time())
-    if not before.relay_fresh or before.blocked or not before.network_reached_recently:
+    if not before.relay_fresh or before.blocked:
         return ModelProbeResult(False, "AG Unlocker relay is not ready for a model probe")
 
     cli_limit = min(max(int(cli_timeout_s), 1), 60)
@@ -262,6 +302,8 @@ def probe_model_response(
         error = str(payload.get("error", "")).lower()
         if "auth" in error or "login" in error or "sign in" in error:
             return ModelProbeResult(False, "Antigravity CLI authentication is required")
+        if "location is not supported" in error or "region is not supported" in error:
+            return ModelProbeResult(False, "Antigravity API rejected the current location (400)")
         return ModelProbeResult(False, "Antigravity CLI did not return a successful model response")
     if not isinstance(payload.get("response"), str) or not payload["response"].strip():
         return ModelProbeResult(False, "Antigravity CLI returned an empty model response")

@@ -30,12 +30,15 @@ def _check_public_config(value):
             _check_public_config(item)
 
 
-def build(dist_dir=None, work_dir=None):
+def build(dist_dir=None, work_dir=None, entry="tray"):
     root_dir = Path(__file__).resolve().parent.parent
-    main_py = root_dir / "src" / "main.py"
+    if entry not in {"tray", "start"}:
+        raise ValueError("entry must be tray or start")
+    app_name = "HappSuite" if entry == "tray" else "start"
+    main_py = root_dir / "src" / ("main.py" if entry == "tray" else "start.py")
     default_config = root_dir / "config" / "default.json"
     dist_dir = Path(dist_dir).resolve() if dist_dir else root_dir / "dist"
-    work_dir = Path(work_dir).resolve() if work_dir else root_dir / "build" / "onedir"
+    work_dir = Path(work_dir).resolve() if work_dir else root_dir / "build" / app_name
 
     with default_config.open("r", encoding="utf-8") as source:
         _check_public_config(json.load(source))
@@ -43,7 +46,7 @@ def build(dist_dir=None, work_dir=None):
     cmd = [
         sys.executable,
         "-m", "PyInstaller",
-        "--name=HappSuite",
+        f"--name={app_name}",
         "--onedir",
         "--noconsole",
         "--clean",
@@ -63,8 +66,8 @@ def build(dist_dir=None, work_dir=None):
     print(" ".join(cmd))
     subprocess.run(cmd, cwd=root_dir, check=True)
 
-    package_dir = dist_dir / "HappSuite"
-    exe_path = package_dir / "HappSuite.exe"
+    package_dir = dist_dir / app_name
+    exe_path = package_dir / f"{app_name}.exe"
     if not exe_path.is_file():
         raise FileNotFoundError(f"PyInstaller did not create {exe_path}")
 
@@ -83,5 +86,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dist-dir", type=Path, help="PyInstaller output directory")
     parser.add_argument("--work-dir", type=Path, help="isolated PyInstaller work directory")
+    parser.add_argument("--entry", choices=("tray", "start"), default="tray",
+                        help="tray legacy executable or windowed start.exe")
     args = parser.parse_args()
-    build(args.dist_dir, args.work_dir)
+    build(args.dist_dir, args.work_dir, args.entry)

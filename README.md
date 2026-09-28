@@ -1,42 +1,41 @@
 # Happ Suite
 
-Happ Suite is a Windows system-tray controller for Happ VPN and the installed
-Antigravity Unlocker background service.
+Панель Windows для управления установленным HAPP VPN и AG Unlocker. Окно можно закрыть: две иконки в трее и горячие клавиши продолжат работать.
 
-## Controls
+## Быстрый запуск
 
-- Press **F8** or choose **F8 — включить / выключить** from the tray menu to
-  toggle the components.
-- Gray means off, yellow means starting, green means the Happ HTTPS proxy and
-  Unlocker listener respond, and red means an error.
-- The tray menu also contains **Выход**.
-- Starting Happ Suite does not connect the VPN automatically.
+1. Скачайте архив `HappSuite-setup-…-win-x64.zip`, распакуйте его целиком и запустите `start.exe`.
+2. В окне нажмите **Установить HAPP**, если HAPP отсутствует. Suite скачает официальный установщик HAPP 4.3.0, проверит SHA-256 и откроет его. Завершите установку и запустите HAPP.
+3. Нажмите **Установить AG**. Suite так же скачает оригинальный AG Unlocker 2.17.0.3 и откроет его. В его окне завершите первоначальную настройку и введите действующий ключ именно для этой версии. Для работы с моделью Google Antigravity нужен установленный клиент и вход в аккаунт.
+4. В поле **Подписка HAPP** вставьте свою HTTPS-ссылку и нажмите **Добавить**. Suite передаст ссылку в уже запущенный HAPP. Убедитесь, что подписка появилась в HAPP, и выберите там профиль.
+5. Кнопки **HAPP VPN** и **Antigravity** включают и выключают соответствующие компоненты. При необходимости измените горячие клавиши в нижней части окна.
 
-The suite does not open a console, browser, or Unlocker setup window while
-handling F8. It checks the Unlocker service already installed by AG Unlocker;
-that service is normally started by Windows at sign-in. The license key is kept
-in `%LOCALAPPDATA%\HappSuite\local.json`, outside the repository and packaged
-builds.
+Архив `HappSuite-lite-…-win-x64.zip` рассчитан на компьютер, где HAPP уже установлен: в нём нет кнопки загрузки HAPP. AG Unlocker можно загрузить из окна обоих вариантов. Потребуются Windows 10/11 x64, интернет для первой загрузки, права администратора при установке сторонних компонентов и собственная подписка HAPP.
 
-## Happ behavior
+**Официальные программы не встроены в ZIP.** По первому нажатию Suite скачивает неизменённые установщики с GitHub их авторов. Так пользователю не приходится самостоятельно искать файлы, а наш публичный архив не перепубликует чужие исполняемые файлы. Версии закреплены: [HAPP 4.3.0](https://github.com/Happ-proxy/happ-desktop/releases/tag/4.3.0) и [AG Unlocker 2.17.0.3](https://github.com/confeden/Antigravity/releases/tag/v2.17.0.3).
 
-The installed Happ 4.3.0 exposes a Windows service, but its public release notes
-do not document a command-line connect/disconnect interface. When no Happ process
-is open, the suite launches `Happ.exe` with the Windows initial-show state set
-to hidden, then checks HTTPS through Happ's configured local proxy. Whether the
-client connects on launch follows the settings already configured in Happ.
+## Окно, трей и клавиши
 
-The suite does not kill an unrelated `Happ.exe` process or stop the shared
-`HappService`. If a VPN session was already active before the suite started, it
-leaves that session untouched when disabling.
+- По умолчанию **Ctrl+Alt+H** переключает HAPP VPN, **Ctrl+Alt+G** переключает relay AG Unlocker. Настроить их можно в окне или в меню иконок **H** и **G** в системном трее.
+- Для нестандартной клавиши ноутбука нажмите **Своя клавиша** и затем нужную кнопку в течение 10 секунд. Если Windows не выдаёт событие или не разрешает его зарегистрировать, прежняя привязка сохранится.
+- Крестик прячет окно. Чтобы вернуть его, запустите `start.exe` снова или выберите **Открыть окно Happ Suite** в меню трея.
+- Пункт **Запускать с Windows** включает автозапуск после входа в учётную запись. После сна статус обновляется, но автоматическое переподключение VPN не подтверждено.
+- **Gemini Web** сейчас показывает только доступность сайта. Ответ модели Google и отдельное включение маршрута для Chrome не подтверждены, поэтому индикатор доступности сайта нельзя считать подтверждением работы Gemini.
 
-## Build
+Ссылка подписки не сохраняется в Happ Suite и не записывается в журнал; после передачи поле очищается. HAPP хранит импортированную подписку по своим правилам. Горячие клавиши хранятся в `%LOCALAPPDATA%\HappSuite\hotkeys.json`, журналы — в `%LOCALAPPDATA%\HappSuite\logs`.
 
-Install the dependencies from `pyproject.toml` and PyInstaller, then run:
+## Разработка и сборка
 
 ```powershell
-py -3 scripts/build.py
+py -3 -m pip install -e . pyinstaller pywin32
+py -3 scripts\build.py --entry start
+py -3 scripts\package_release.py
 ```
 
-The generated executable is written to `dist\HappSuite.exe` and is built
-without a console window.
+`dist\start\start.exe` — локальная сборка. `dist\release` содержит два ZIP и файлы SHA-256. Пароли, подписки, локальные журналы, DNS-настройки и исполняемые файлы сторонних авторов в архивы не входят.
+
+Текущий интерфейс HAPP использует уже запущенный экземпляр версии 4.3.0 и его локальный IPC. Подтверждение IPC означает получение команды приложением, а успешное VPN-подключение определяется отдельно по TUN-маршруту и внешнему HTTPS. Для AG Unlocker используется созданное его установщиком задание Windows; копирование одного `ag_dns.exe` не создаёт это задание и не выполняет первоначальную настройку.
+
+## Состояние релиза
+
+Новый `start.exe` и установка на чистом компьютере проходят отдельную проверку перед публикацией. В частности, до подтверждения реального переключения Gemini Web с включённым VPN не следует считать три переключателя полностью готовыми.

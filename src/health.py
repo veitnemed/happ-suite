@@ -156,11 +156,15 @@ class HealthMonitor:
         """Run a single health check cycle."""
         tunnel_up = check_tunnel(self.config)
         unlocker_up = self.orchestrator.ag_unlocker.is_running()
+        if tunnel_up and not self.orchestrator.desired_enabled:
+            self.orchestrator.desired_enabled = True
+            self.orchestrator.happ.set_state(ComponentState.RUNNING)
         if self.orchestrator.desired_enabled:
             if self.orchestrator.happ.state not in (ComponentState.STARTING, ComponentState.STOPPING):
                 self.orchestrator.happ.set_state(
                     ComponentState.RUNNING if tunnel_up else ComponentState.DEGRADED
                 )
+        if self.orchestrator.ag_unlocker.requested_enabled:
             if self.orchestrator.ag_unlocker.state not in (ComponentState.STARTING, ComponentState.STOPPING):
                 if unlocker_up and self.orchestrator.ag_unlocker.model_verified():
                     self.orchestrator.ag_unlocker.set_state(ComponentState.RUNNING)
@@ -182,8 +186,9 @@ class HealthMonitor:
             if self._on_health_update:
                 self._on_health_update(status)
         else:
-            self._consecutive_fails += 1
-            logger.warning(f"Tunnel DOWN (consecutive fails: {self._consecutive_fails})")
+            if self.orchestrator.desired_enabled:
+                self._consecutive_fails += 1
+                logger.warning(f"Tunnel DOWN (consecutive fails: {self._consecutive_fails})")
 
             status = HealthStatus()
             status.tunnel_up = False

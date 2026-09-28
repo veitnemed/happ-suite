@@ -14,6 +14,7 @@ import os
 import struct
 import sys
 import time
+from urllib.parse import urlsplit
 from ctypes import wintypes
 
 import psutil
@@ -149,3 +150,18 @@ class HappIpcClient:
         if action not in {"connect", "disconnect"}:
             raise ValueError("Unsupported HAPP deep link action")
         return self._send(f"Happ.exe,happ://{action}".encode("utf-8"))
+
+    def import_subscription_url(self, url: str) -> int:
+        """Ask the existing HAPP GUI to import an HTTPS subscription link.
+
+        The IPC acknowledgement confirms delivery only. HAPP may still reject
+        the subscription, so the caller must not claim a successful import.
+        Never log the link: it commonly contains a private token.
+        """
+        url = url.strip()
+        parts = urlsplit(url)
+        if (parts.scheme.lower() != "https" or not parts.hostname or
+                parts.username or parts.password or len(url) > 8192 or
+                any(ord(char) < 32 for char in url)):
+            raise ValueError("Enter an HTTPS subscription URL")
+        return self._send(f"Happ.exe,happ://add/{url}".encode("utf-8"))

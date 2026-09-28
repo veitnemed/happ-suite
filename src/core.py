@@ -27,11 +27,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 try:
     from .app_config import Config
     from .happ_controller import HappController
-    from .ag_unlocker import ensure_dns_relay, read_gate_readiness, probe_model_response
+    from .ag_unlocker import ensure_dns_relay, stop_dns_relay, read_gate_readiness, probe_model_response
 except (ImportError, ValueError):
     from app_config import Config
     from happ_controller import HappController
-    from ag_unlocker import ensure_dns_relay, read_gate_readiness, probe_model_response
+    from ag_unlocker import ensure_dns_relay, stop_dns_relay, read_gate_readiness, probe_model_response
 
 logger = logging.getLogger("happ_suite.core")
 
@@ -330,6 +330,7 @@ class AGUnlockerComponent(Component):
         self.config = config
         self.activation_unix: float = 0.0
         self.started_task_this_session = False
+        self.requested_enabled = False
 
     def is_running(self) -> bool:
         """Require both the AG unlocker process and its local listener."""
@@ -351,6 +352,7 @@ class AGUnlockerComponent(Component):
     def start(self) -> bool:
         """Ensure the installer's headless Task Scheduler relay is available."""
         self.activation_unix = time.time()
+        self.requested_enabled = True
         result = ensure_dns_relay()
         self.started_task_this_session |= result.started_by_suite
         if not result.ready:
@@ -366,10 +368,17 @@ class AGUnlockerComponent(Component):
         return read_gate_readiness(self.activation_unix).ready
 
     def stop(self):
-        """Leave the installer's persistent relay and NRPT/proxy rules intact."""
-        self.activation_unix = 0.0
-        self.set_state(ComponentState.STOPPED)
-        return True
+        """Stop only the installed relay task; F9 can restart it later."""
+        self.set_state(ComponentState.STOPPING)
+        result = stop_dns_relay()
+        if result.ready:
+            self.activation_unix = 0.0
+            self.requested_enabled = False
+            self.set_state(ComponentState.STOPPED)
+            return True
+        logger.error("AG Unlocker relay could not stop: %s", result.reason)
+        self.set_state(ComponentState.ERROR)
+        return False
 
 
 # ─── Orchestrator ──────────────────────────────────────────────
@@ -450,7 +459,6 @@ class Orchestrator:
         self.happ.cancel_requested.set()
         disconnected = self.happ.stop_owned()
         if disconnected:
-            self.ag_unlocker.stop()
             self.desired_enabled = False
         logger.info("=== VPN disconnected: %s ===", disconnected)
         return disconnected
@@ -459,6 +467,62 @@ class Orchestrator:
         """Cancel a pending startup without touching components owned by others."""
         self.desired_enabled = False
         self.happ.cancel_requested.set()
+
+    # ── Independent per-component toggles ────────────────────────────────────
+
+    def toggle_happ(self) -> bool:
+        """Toggle only the Happ VPN tunnel without touching AG Unlocker."""
+        observed = self.happ.controller.read_status(with_external_probe=False)
+        if observed.route.through_happ:
+            return self._stop_happ_only()
+        else:
+            return self._start_happ_only()
+
+    def _start_happ_only(self) -> bool:
+        """Connect Happ VPN without starting AG Unlocker."""
+        logger.info("=== Starting Happ VPN only ===")
+        self.happ.cancel_requested.clear()
+        self.desired_enabled = True
+        ok = self.happ.start()
+        logger.info("=== Happ VPN start: %s ===", "OK" if ok else "FAILED")
+        return ok
+
+    def _stop_happ_only(self) -> bool:
+        """Disconnect Happ VPN without stopping AG Unlocker."""
+        logger.info("=== Stopping Happ VPN only ===")
+        self.happ.cancel_requested.set()
+        disconnected = self.happ.stop_owned()
+        if disconnected:
+            # If Happ is off, the suite is no longer desired-enabled.
+            # AG Unlocker may still run on its own — don't force-stop it.
+            self.desired_enabled = False
+        logger.info("=== Happ VPN stop: %s ===", "OK" if disconnected else "FAILED")
+        return disconnected
+
+    def toggle_ag_unlocker(self) -> bool:
+        """Toggle only AG Unlocker without touching Happ VPN."""
+        if self.ag_unlocker.state in (ComponentState.RUNNING, ComponentState.DEGRADED):
+            return self._stop_ag_only()
+        else:
+            return self._start_ag_only()
+
+    def _start_ag_only(self) -> bool:
+        """Start AG Unlocker relay without requiring Happ VPN."""
+        logger.info("=== Starting AG Unlocker only ===")
+        ok = self.ag_unlocker.start()
+        # F9 controls the relay only. The model probe can take tens of seconds
+        # and has failed on account-region restrictions; don't block a toggle
+        # waiting for it. Health monitoring will mark Gemini ready only when a
+        # fresh successful model response appears in the relay's gate record.
+        logger.info("=== AG Unlocker start: %s ===", "OK" if ok else "FAILED")
+        return ok
+
+    def _stop_ag_only(self) -> bool:
+        """Stop AG Unlocker relay without touching Happ VPN."""
+        logger.info("=== Stopping AG Unlocker only ===")
+        result = self.ag_unlocker.stop()
+        logger.info("=== AG Unlocker stop: %s ===", "OK" if result else "FAILED")
+        return result
 
     def restart_vpn(self, server: Optional[Dict] = None) -> bool:
         """Recovery must use the independent bridge with a restoration record."""
@@ -479,6 +543,6 @@ class Orchestrator:
             ComponentState.STOPPED
         )
         self.ag_unlocker.set_state(
-            ComponentState.DEGRADED if self.desired_enabled and self.ag_unlocker.is_running()
-            else ComponentState.STOPPED
+            ComponentState.DEGRADED if self.ag_unlocker.is_running() else ComponentState.STOPPED
         )
+        self.ag_unlocker.requested_enabled = self.ag_unlocker.state != ComponentState.STOPPED
