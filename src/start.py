@@ -50,7 +50,17 @@ def _show_existing():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--background", action="store_true", help="start in the tray after Windows sign-in")
+    parser.add_argument("--gemini-dns-helper", choices=("enable", "disable"), help=argparse.SUPPRESS)
+    parser.add_argument("--dns-result", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.gemini_dns_helper:
+        if not args.dns_result:
+            parser.error("--dns-result is required for the DNS helper")
+        try:
+            from .gemini_dns import helper_main
+        except ImportError:
+            from gemini_dns import helper_main
+        raise SystemExit(helper_main(args.gemini_dns_helper, args.dns_result))
     mutex = _single_instance_handle()
     if mutex is None:
         if not args.background:

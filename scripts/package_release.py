@@ -1,30 +1,31 @@
 """Make two clean Windows ZIPs from the built start.exe directory."""
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
 import zipfile
 
 
-VERSION = "2.1.0-preview"
+VERSION = "2.2.0"
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "dist" / "start"
 OUTPUT = ROOT / "dist" / "release"
 
 
-def build_zip(variant: str) -> Path:
+def build_zip(variant: str, source: Path = SOURCE, output: Path = OUTPUT) -> Path:
     if variant not in {"setup", "lite"}:
         raise ValueError(variant)
-    if not (SOURCE / "start.exe").is_file() or not (SOURCE / "config" / "default.json").is_file():
+    if not (source / "start.exe").is_file() or not (source / "config" / "default.json").is_file():
         raise FileNotFoundError("Build start.exe first: py -3 scripts/build.py --entry start")
-    OUTPUT.mkdir(parents=True, exist_ok=True)
-    zip_path = OUTPUT / f"HappSuite-{variant}-{VERSION}-win-x64.zip"
+    output.mkdir(parents=True, exist_ok=True)
+    zip_path = output / f"HappSuite-{variant}-{VERSION}-win-x64.zip"
     readme = (ROOT / "README.md").read_bytes()
     license_text = (ROOT / "LICENSE").read_bytes()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for path in sorted(SOURCE.rglob("*")):
+        for path in sorted(source.rglob("*")):
             if path.is_file():
-                relative = path.relative_to(SOURCE)
+                relative = path.relative_to(source)
                 if any(part in {"logs", "__pycache__"} for part in relative.parts):
                     continue
                 archive.write(path, relative.as_posix())
@@ -47,5 +48,9 @@ def build_zip(variant: str) -> Path:
 
 
 if __name__ == "__main__":
-    build_zip("setup")
-    build_zip("lite")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, default=SOURCE)
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    options = parser.parse_args()
+    build_zip("setup", options.source.resolve(), options.output.resolve())
+    build_zip("lite", options.source.resolve(), options.output.resolve())

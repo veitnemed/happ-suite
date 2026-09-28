@@ -7,7 +7,9 @@ import os
 from pathlib import Path
 import sys
 import threading
+import time
 import tkinter as tk
+import webbrowser
 from tkinter import ttk
 
 import requests
@@ -18,12 +20,14 @@ try:
     from .happ_ipc import HappIpcClient
     from .official_installers import HAPP, AG_UNLOCKER, download, run_installer
     from .autostart import is_enabled as autostart_enabled, set_enabled as set_autostart
+    from .gemini_dns import DnsManager, apply_action, XBOX_DNS
 except ImportError:
     from core import ComponentState
     from hotkey import HotkeyChoice, MOD_ALT, MOD_CONTROL, MOD_SHIFT, VK_F8, VK_F9
     from happ_ipc import HappIpcClient
     from official_installers import HAPP, AG_UNLOCKER, download, run_installer
     from autostart import is_enabled as autostart_enabled, set_enabled as set_autostart
+    from gemini_dns import DnsManager, apply_action, XBOX_DNS
 
 
 BG = "#10141C"
@@ -53,9 +57,13 @@ class Dashboard:
         self.tray = tray
         self.config = config
         self.variant = package_variant()
-        self.gemini_site_status = "Не проверено"
+        self.gemini_site_status = "Сайт ещё не проверен"
         self._gemini_probe_running = False
-        self._next_gemini_probe = 0
+        self._dns_busy = False
+        self._dns_refreshing = False
+        self._dns_status = None
+        self._dns_error = ""
+        self._next_dns_refresh = 0.0
         self._build()
         self._refresh()
 
@@ -75,8 +83,8 @@ class Dashboard:
         root = self.root
         root.title("Happ Suite")
         root.configure(bg=BG)
-        root.geometry("690x665")
-        root.minsize(610, 610)
+        root.geometry("690x735")
+        root.minsize(650, 710)
         root.protocol("WM_DELETE_WINDOW", root.withdraw)
 
         content = tk.Frame(root, bg=BG, padx=26, pady=22)
@@ -104,8 +112,12 @@ class Dashboard:
                    lambda: self.tray._schedule_toggle_happ())
         self._card(control, "ag", "Antigravity", "Локальный relay AG Unlocker",
                    lambda: self.tray._schedule_toggle_ag())
-        self._card(control, "gemini", "Gemini Web", "Доступность сайта в Chrome",
-                   self._check_gemini_now, toggle=False)
+        self._card(control, "gemini", "Gemini Web", "Проверяю DNS текущей сети…",
+                   self._toggle_gemini_dns)
+        web_actions = tk.Frame(control, bg=BG)
+        web_actions.pack(fill="x", pady=(0, 8))
+        self._button(web_actions, "Открыть Gemini", self._open_gemini, width=16).pack(side="left")
+        self._button(web_actions, "Проверить сайт", self._check_gemini_now, width=16).pack(side="left", padx=(7, 0))
 
         subscription = tk.Frame(control, bg=CARD, padx=16, pady=10)
         subscription.pack(fill="x", pady=(3, 8))
@@ -153,6 +165,13 @@ class Dashboard:
                        variable=self.autostart, command=self._set_autostart,
                        bg=BG, fg=MUTED, selectcolor=FIELD, activebackground=BG,
                        activeforeground=TEXT, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
+        self._label(settings,
+                    "Gemini Web: Xbox DNS " + " / ".join(XBOX_DNS["ipv4"]) +
+                    ".\nПрименяется к текущему Wi-Fi/Ethernet и сохраняется после выхода.\n"
+                    "Кнопка «Вернуть DNS» восстановит прежние настройки.\n"
+                    "При смене сети сначала верните DNS предыдущего подключения.\n"
+                    "VPN и безопасный DNS браузера могут использовать другие серверы.",
+                    color=MUTED, justify="left", wraplength=590).pack(anchor="w", pady=(16, 0))
         self.message = self._label(content, "Готово к работе", color=MUTED, anchor="w")
         self.message.pack(side="bottom", fill="x", pady=(7, 0))
         self._show_page("control")
@@ -174,7 +193,7 @@ class Dashboard:
         button = self._button(title_row, "Включить" if toggle else "Проверить", action,
                               filled=toggle, width=12)
         button.pack(side="right")
-        detail = self._label(frame, description, color=MUTED, bg=CARD)
+        detail = self._label(frame, description, color=MUTED, bg=CARD, justify="left", wraplength=550)
         detail.pack(anchor="w", padx=(23, 0), pady=(3, 0))
         self.cards[key] = (dot, detail, button)
 
@@ -243,6 +262,7 @@ class Dashboard:
         if self._gemini_probe_running:
             return
         self._gemini_probe_running = True
+        self.gemini_site_status = "Проверяю HTTPS…"
 
         def worker():
             try:
@@ -250,7 +270,7 @@ class Dashboard:
                     session.trust_env = False
                     response = session.get("https://gemini.google.com", timeout=6)
                     self.gemini_site_status = (
-                        "Сайт отвечает (модель не проверена)" if response.status_code < 500
+                        "Сайт отвечает; модель проверяется в браузере" if 200 <= response.status_code < 400
                         else f"Сайт вернул HTTP {response.status_code}"
                     )
             except requests.RequestException:
@@ -259,6 +279,47 @@ class Dashboard:
                 self._gemini_probe_running = False
 
         threading.Thread(target=worker, name="GeminiWebProbe", daemon=True).start()
+
+    def _open_gemini(self):
+        webbrowser.open("https://gemini.google.com/app")
+
+    def _read_dns_status(self):
+        if self._dns_refreshing or self._dns_busy:
+            return
+        self._dns_refreshing = True
+
+        def worker():
+            try:
+                self._dns_status = DnsManager().status()
+                self._dns_error = ""
+            except Exception as exc:
+                self._dns_error = str(exc)
+            finally:
+                self._dns_refreshing = False
+                self._next_dns_refresh = time.monotonic() + 15
+        threading.Thread(target=worker, name="GeminiDnsStatus", daemon=True).start()
+
+    def _toggle_gemini_dns(self):
+        if self._dns_busy or self._dns_refreshing or self._dns_status is None or self._dns_error:
+            return
+        action = "disable" if self._dns_status["managed"] else "enable"
+        self._dns_busy = True
+        self.set_message("Windows запросит разрешение изменить DNS текущей сети")
+
+        def worker():
+            try:
+                result = apply_action(action)
+                self.set_message(result["message"])
+                self._dns_status = DnsManager().status()
+                self.gemini_site_status = "Сайт ещё не проверен"
+                if action == "enable":
+                    self._check_gemini_now()
+            except Exception as exc:
+                self.set_message(str(exc))
+            finally:
+                self._dns_busy = False
+                self._next_dns_refresh = 0
+        threading.Thread(target=worker, name="GeminiDnsChange", daemon=True).start()
 
     def _refresh(self):
         palette = {
@@ -281,9 +342,20 @@ class Dashboard:
                              "Ожидает подтверждения" if state == ComponentState.DEGRADED else "Ошибка")
             button.configure(text="Выключить" if state in (ComponentState.RUNNING, ComponentState.DEGRADED)
                              else "Включить")
-        dot, detail, _ = self.cards["gemini"]
-        dot.itemconfigure(1, fill=GREEN if self.gemini_site_status.startswith("Сайт отвечает") else MUTED)
-        detail.configure(text=self.gemini_site_status)
+        if time.monotonic() >= self._next_dns_refresh:
+            self._read_dns_status()
+        dot, detail, button = self.cards["gemini"]
+        status = self._dns_status
+        text = self._dns_error or (status["message"] if status else "Проверяю DNS текущей сети…")
+        color = RED if self._dns_error else GREEN if status and status["state"] == "on" else MUTED
+        if status and status["state"] == "changed":
+            color = YELLOW
+        if status and status["vpn_active"]:
+            text += "\nVPN может использовать собственный DNS."
+        detail.configure(text=text + "\n" + self.gemini_site_status)
+        dot.itemconfigure(1, fill=YELLOW if self._dns_busy else color)
+        button.configure(text="Подождите…" if self._dns_busy else "Вернуть DNS" if status and status["managed"] else "Включить DNS",
+                         state="disabled" if self._dns_busy or self._dns_refreshing or status is None or self._dns_error else "normal")
         for key, widget in self.key_labels.items():
             widget.configure(text=self.tray._hotkey_choices[key].label)
         self.root.after(1000, self._refresh)

@@ -1,6 +1,6 @@
 [project]
 name = "happ-suite"
-version = "2.1.0rc1"
+version = "2.2.0"
 description = "Windows tray controls for HAPP VPN and AG Unlocker"
 requires-python = ">=3.10"
 license = "MIT"
@@ -9,6 +9,7 @@ dependencies = [
     "pystray>=0.19",
     "Pillow>=10.0",
     "requests>=2.31",
+    "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.scripts]
