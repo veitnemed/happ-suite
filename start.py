@@ -26,16 +26,26 @@ def _known_packaged_suite(path: Path) -> bool:
     return path.is_relative_to(ROOT / "dist") or path.is_relative_to(installed)
 
 
-def _stop_old_packaged_suite() -> None:
+def _known_source_suite(process: psutil.Process) -> bool:
+    launchers = {ROOT / "start.py", ROOT / "start.pyw"}
+    try:
+        return any(Path(argument).resolve() in launchers for argument in process.cmdline()[1:])
+    except (OSError, psutil.Error):
+        return False
+
+
+def _stop_old_suite() -> None:
     """Free Suite's hotkeys; never touch HAPP.exe or AG Unlocker."""
     session = _session_id(os.getpid())
     for process in psutil.process_iter(["pid", "exe"]):
         try:
+            if process.pid == os.getpid():
+                continue
             executable = process.info["exe"]
             if not executable or _session_id(process.pid) != session:
                 continue
-            if _known_packaged_suite(Path(executable)):
-                print(f"Stopping old packaged Happ Suite (PID {process.pid})", flush=True)
+            if _known_packaged_suite(Path(executable)) or _known_source_suite(process):
+                print(f"Stopping previous Happ Suite (PID {process.pid})", flush=True)
                 process.terminate()
                 process.wait(timeout=5)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -45,7 +55,7 @@ def _stop_old_packaged_suite() -> None:
 def main() -> None:
     if sys.platform != "win32":
         raise SystemExit("Happ Suite needs Windows")
-    _stop_old_packaged_suite()
+    _stop_old_suite()
     from src.start import main as start_main
     start_main()
 

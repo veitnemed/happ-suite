@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import sys
@@ -46,6 +47,7 @@ YELLOW = "#F0C979"
 RED = "#F17D83"
 LINE = "#263442"
 FONT = "Segoe UI"
+logger = logging.getLogger("happ_suite.dashboard")
 
 
 def package_variant() -> str:
@@ -79,6 +81,9 @@ class Dashboard:
         self._build()
         if self.config.vpn_backend == "mihomo":
             try:
+                saved_url = self.tray.orchestrator.vpn.saved_subscription_url()
+                if saved_url:
+                    self.subscription.insert(0, saved_url)
                 nodes = self.tray.orchestrator.vpn.provider_nodes()
                 names = [node["name"] for node in nodes]
                 self.vpn_node.configure(values=names)
@@ -183,11 +188,12 @@ class Dashboard:
         row = tk.Frame(subscription, bg=CARD)
         row.pack(fill="x")
         self.subscription = tk.Entry(row, bg=FIELD, fg=TEXT, insertbackground=GREEN,
-                                     relief="flat", font=(FONT, 10), show="•",
+                                     relief="flat", font=(FONT, 10), show="",
                                      highlightthickness=1, highlightbackground=LINE,
                                      highlightcolor=GREEN, bd=0)
         self.subscription.pack(side="left", fill="x", expand=True, ipady=self._px(8))
-        self._button(row, "Показать", self._reveal_subscription, width=9).pack(side="left", padx=(self._px(8), 0))
+        self.subscription_visibility = self._button(row, "Скрыть", self._reveal_subscription, width=9)
+        self.subscription_visibility.pack(side="left", padx=(self._px(8), 0))
         self._button(row, "Сохранить", self._import_subscription, filled=True, width=11).pack(side="left", padx=(self._px(8), 0))
         node_row = tk.Frame(subscription, bg=CARD)
         node_row.pack(fill="x", pady=(self._px(9), 0))
@@ -239,6 +245,8 @@ class Dashboard:
                        bg=BG, fg=MUTED, selectcolor=FIELD, activebackground=BG,
                        activeforeground=TEXT, font=(FONT, 9), bd=0,
                        highlightthickness=0).pack(anchor="w", pady=(self._px(12), 0))
+        self._button(settings, "Открыть журнал", self._open_log, width=17).pack(
+            anchor="w", pady=(self._px(8), 0))
         self._label(settings,
                     "Gemini Web: Xbox DNS " + " / ".join(XBOX_DNS["ipv4"]) +
                     ".\nПрименяется к текущему Wi-Fi/Ethernet и сохраняется после выхода.\n"
@@ -249,7 +257,8 @@ class Dashboard:
         footer = tk.Frame(content, bg=BG)
         footer.pack(side="bottom", fill="x", pady=(self._px(10), 0))
         tk.Frame(footer, bg=LINE, height=1).pack(fill="x", pady=(0, self._px(8)))
-        self.message = self._label(footer, "Готово к работе", size=9, color=MUTED, anchor="w")
+        self.message = self._label(footer, "Готово к работе", size=9, color=MUTED,
+                                   anchor="w", justify="left", wraplength=self._px(710))
         self.message.pack(side="left", fill="x", expand=True)
         self._label(footer, "HAPP SUITE  /  WINDOWS", size=8, color="#637283", weight="bold").pack(side="right")
         self._show_page("control")
@@ -319,13 +328,18 @@ class Dashboard:
         self.root.after(0, lambda: self.message.configure(text=message))
 
     def _reveal_subscription(self):
-        self.subscription.configure(show="" if self.subscription.cget("show") else "•")
+        hidden = bool(self.subscription.cget("show"))
+        self.subscription.configure(show="" if hidden else "•")
+        self.subscription_visibility.configure(text="Скрыть" if hidden else "Показать")
 
     def _import_subscription(self):
         url = self.subscription.get().strip()
         if not url:
             self.set_message("Вставьте ссылку подписки")
             return
+
+        self.set_message("Проверяю подписку… ссылка останется в поле")
+        logger.info("Subscription save requested; backend=%s", self.config.vpn_backend)
 
         def worker():
             try:
@@ -335,24 +349,37 @@ class Dashboard:
                 else:
                     result = self.tray.orchestrator.vpn.set_subscription_url(url)
                     names = [node["name"] for node in result.nodes]
+                    logger.info("Subscription saved; nodes=%d; provider_limit_warning=%s; fallback=%s",
+                                len(names), result.device_limit_warning, result.used_mihomo_suffix)
                     self.root.after(0, lambda: self.vpn_node.configure(values=names))
+                    warning = (" Провайдер сообщил о лимите устройств; подключение ещё нужно проверить."
+                               if result.device_limit_warning else " Нажмите «Включить».")
                     self.root.after(0, lambda: self._subscription_saved(
-                        f"Подписка проверена: загружено узлов {len(names)}. Нажмите «Включить»."
+                        f"Подписка проверена: загружено узлов {len(names)}.{warning}"
                     ))
             except ProviderFormatError as exc:
+                logger.warning("Subscription format rejected: %s", exc)
                 self.set_message(str(exc))
             except SubscriptionError as exc:
+                logger.warning("Subscription rejected: %s", exc)
                 self.set_message(str(exc))
             except ValueError:
+                logger.warning("Subscription URL failed validation")
                 self.set_message("Нужна корректная HTTPS-ссылка подписки")
-            except Exception:
-                self.set_message("Не удалось сохранить ссылку. Проверьте HTTPS-адрес и режим VPN.")
+            except Exception as exc:
+                logger.error("Subscription save failed: %s", type(exc).__name__)
+                self.set_message("Не удалось сохранить ссылку. Откройте журнал в настройках.")
         threading.Thread(target=worker, name="ImportHappSubscription", daemon=True).start()
 
     def _subscription_saved(self, message: str):
-        self.subscription.delete(0, "end")
-        self.subscription.configure(show="•")
         self.set_message(message)
+
+    def _open_log(self):
+        log_path = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "HappSuite" / "logs" / "happ_suite.log"
+        try:
+            os.startfile(log_path)
+        except OSError:
+            self.set_message(f"Не удалось открыть журнал: {log_path}")
 
     def _install_mihomo(self):
         def worker():

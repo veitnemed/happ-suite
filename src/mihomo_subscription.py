@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
+import logging
 import os
 from pathlib import Path
 import re
@@ -17,6 +18,8 @@ import yaml
 from .mihomo_config import _atomic_write, validate_subscription_url
 from .vpn_backend import ProviderFormatError, SubscriptionError
 
+logger = logging.getLogger("happ_suite.subscription")
+
 
 @dataclass(frozen=True)
 class SubscriptionResult:
@@ -29,6 +32,7 @@ class SubscriptionResult:
     hwid_active: bool
     update_interval_hours: int | None = None
     expires_at: int | None = None
+    device_limit_warning: bool = False
 
 
 def load_or_create_hwid(directory: Path) -> str:
@@ -78,9 +82,14 @@ class SubscriptionClient:
         source = validate_subscription_url(url)
         source_host = (urlsplit(source).hostname or "provider").lower()
         fingerprint = hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+        logger.info("Subscription fetch started; host=%s; id=%s", source_host, fingerprint)
         response = self._get(source)
         suffix_used = False
         try:
+            logger.info("Subscription response; status=%d; type=%s; limit=%s",
+                        response.status_code, response.headers.get("content-type", "unknown").split(";", 1)[0],
+                        self._true(response.headers.get("x-hwid-max-devices-reached")) or
+                        self._true(response.headers.get("x-hwid-limit")))
             self._check_response(response)
             body = self._read_body(response)
         except Exception:
@@ -93,6 +102,7 @@ class SubscriptionClient:
                 raise ProviderFormatError("Сервер вернул веб-страницу вместо конфигурации VPN")
             response = self._get(fallback)
             suffix_used = True
+            logger.info("Subscription HTML response; trying Mihomo format endpoint")
 
         try:
             self._check_response(response)
@@ -102,6 +112,8 @@ class SubscriptionClient:
             if self._looks_like_html(body, content_type):
                 raise ProviderFormatError("Сервер вернул веб-страницу вместо конфигурации VPN")
             profile = self._parse_mihomo_yaml(body)
+            logger.info("Subscription parsed; nodes=%d; bytes=%d; fallback=%s",
+                        len(profile["proxies"]), len(body), suffix_used)
             info = self._userinfo(response.headers.get("subscription-userinfo", ""))
             expiry = info.get("expire", 0) or 0
             if expiry and expiry <= int(time.time()):
@@ -117,6 +129,10 @@ class SubscriptionClient:
                 hwid_active=self._true(response.headers.get("x-hwid-active")),
                 update_interval_hours=interval,
                 expires_at=expiry or None,
+                device_limit_warning=(
+                    self._true(response.headers.get("x-hwid-max-devices-reached")) or
+                    self._true(response.headers.get("x-hwid-limit"))
+                ),
             )
         finally:
             response.close()
@@ -177,10 +193,15 @@ class SubscriptionClient:
 
     def _check_response(self, response):
         headers = response.headers
-        if self._true(headers.get("x-hwid-max-devices-reached")) or self._true(headers.get("x-hwid-limit")):
-            raise SubscriptionError("Достигнут лимит устройств подписки")
-        if self._true(headers.get("x-hwid-not-supported")):
-            raise SubscriptionError("Провайдер требует идентификатор устройства (HWID)")
+        # Some providers return a complete HTTP 200 Mihomo profile while also
+        # reporting that their device limit is reached. Parse that profile and
+        # surface the warning; a limit response without usable nodes still
+        # fails validation below. A non-200 limit response remains an error.
+        if response.status_code != 200:
+            if self._true(headers.get("x-hwid-max-devices-reached")) or self._true(headers.get("x-hwid-limit")):
+                raise SubscriptionError("Достигнут лимит устройств подписки")
+            if self._true(headers.get("x-hwid-not-supported")):
+                raise SubscriptionError("Провайдер требует идентификатор устройства (HWID)")
         if response.status_code == 403:
             raise SubscriptionError("Подписка недоступна или истекла (HTTP 403)")
         if response.status_code == 404:

@@ -101,6 +101,10 @@ class MihomoVPNComponent(Component):
             raise SubscriptionError("Добавьте HTTPS-ссылку на совместимую подписку Mihomo/Clash")
         return url
 
+    def saved_subscription_url(self) -> str:
+        """Return the locally protected URL for the dashboard field."""
+        return SecretStore(self.paths.secrets).load().get("subscription_url", "")
+
     def _load_last_good_node(self) -> str | None:
         try:
             value = json.loads(self.paths.state.read_text(encoding="utf-8"))

@@ -46,7 +46,8 @@ def install_mihomo(paths: RuntimePaths | None = None, *, installer: Installer = 
                 if info.is_dir():
                     continue
                 name = PurePosixPath(info.filename)
-                if name.name.casefold() == "mihomo.exe":
+                executable_name = name.name.casefold()
+                if executable_name.startswith("mihomo") and executable_name.endswith(".exe"):
                     if executable_member is not None:
                         raise BinaryIntegrityError("Mihomo archive contains multiple executables")
                     executable_member = info
