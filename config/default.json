@@ -1,4 +1,6 @@
 {
+    "vpn_backend": "mihomo",
+    "mihomo_wait_timeout_sec": 50,
     "happ_exe": "C:\\Program Files\\FlyFrogLLC\\Happ\\Happ.exe",
     "proxy_port": 10809,
     "proxy_url": "http://127.0.0.1:10809",

@@ -11,11 +11,11 @@ import requests
 
 try:
     from .app_config import Config
-    from .core import Orchestrator, ComponentState, is_port_open, _reg_get_value
+    from .core import Orchestrator, ComponentState, ComponentOwnership, is_port_open, _reg_get_value
     from .happ_controller import HappController
 except (ImportError, ValueError):
     from app_config import Config
-    from core import Orchestrator, ComponentState, is_port_open, _reg_get_value
+    from core import Orchestrator, ComponentState, ComponentOwnership, is_port_open, _reg_get_value
     from happ_controller import HappController
 
 logger = logging.getLogger("happ_suite.health")
@@ -154,24 +154,32 @@ class HealthMonitor:
 
     def _check_once(self):
         """Run a single health check cycle."""
-        tunnel_up = check_tunnel(self.config)
+        vpn = self.orchestrator.happ
+        controller = vpn if hasattr(vpn, "read_status") else vpn.controller
+        happ_status = controller.read_status()
+        tunnel_up = happ_status.connected
         unlocker_up = self.orchestrator.ag_unlocker.is_running()
-        if tunnel_up and not self.orchestrator.desired_enabled:
-            self.orchestrator.desired_enabled = True
-            self.orchestrator.happ.set_state(ComponentState.RUNNING)
-        if self.orchestrator.desired_enabled:
-            if self.orchestrator.happ.state not in (ComponentState.STARTING, ComponentState.STOPPING):
-                self.orchestrator.happ.set_state(
-                    ComponentState.RUNNING if tunnel_up else ComponentState.DEGRADED
-                )
-        if self.orchestrator.ag_unlocker.requested_enabled:
-            if self.orchestrator.ag_unlocker.state not in (ComponentState.STARTING, ComponentState.STOPPING):
-                if unlocker_up and self.orchestrator.ag_unlocker.model_verified():
-                    self.orchestrator.ag_unlocker.set_state(ComponentState.RUNNING)
-                elif not unlocker_up:
-                    self.orchestrator.ag_unlocker.set_state(ComponentState.ERROR)
-                elif self.orchestrator.ag_unlocker.state != ComponentState.ERROR:
-                    self.orchestrator.ag_unlocker.set_state(ComponentState.DEGRADED)
+        happ = vpn
+        if happ_status.route.through_happ and happ.ownership == ComponentOwnership.UNKNOWN:
+            happ.ownership = ComponentOwnership.EXTERNAL
+        happ.observe(
+            ComponentState.RUNNING if tunnel_up else
+            ComponentState.DEGRADED if happ_status.route.through_happ else
+            ComponentState.STOPPED,
+            preserve_transition=True,
+        )
+
+        unlocker = self.orchestrator.ag_unlocker
+        if unlocker_up and unlocker.ownership == ComponentOwnership.UNKNOWN:
+            unlocker.ownership = ComponentOwnership.EXTERNAL
+        elif not unlocker_up:
+            unlocker.ownership = ComponentOwnership.UNKNOWN
+        if unlocker_up and unlocker.model_verified():
+            unlocker.observe(ComponentState.RUNNING, preserve_transition=True)
+        elif not unlocker_up:
+            unlocker.observe(ComponentState.STOPPED, preserve_transition=True)
+        else:
+            unlocker.observe(ComponentState.DEGRADED, preserve_transition=True)
 
         if tunnel_up:
             self._consecutive_fails = 0
@@ -186,7 +194,7 @@ class HealthMonitor:
             if self._on_health_update:
                 self._on_health_update(status)
         else:
-            if self.orchestrator.desired_enabled:
+            if getattr(self.orchestrator, "desired_enabled", False):
                 self._consecutive_fails += 1
                 logger.warning(f"Tunnel DOWN (consecutive fails: {self._consecutive_fails})")
 

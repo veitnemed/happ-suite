@@ -1,7 +1,7 @@
 """
 System Tray UI for Happ Suite.
 Shows 🟢/🟡/🔴 icon + context menu with two independent controls:
-  • Ctrl+Alt+H — toggle Happ VPN
+  • Ctrl+Alt+H — toggle VPN
   • Ctrl+Alt+G — toggle AG Unlocker
 """
 import logging
@@ -12,18 +12,20 @@ from PIL import Image, ImageDraw, ImageFont
 
 try:
     from .app_config import Config
-    from .core import Orchestrator, ComponentState
+    from .core import Orchestrator, ComponentState, ComponentOwnership
     from .health import HealthMonitor, HealthStatus
     from .hotkey import (GlobalHotkey, HotkeyChoice, NextKeyCapture, VK_H, VK_G,
                          VK_F8, VK_F9, SHORTCUT_MODIFIERS, load_hotkey_choices,
                          save_hotkey_choices)
+    from .windows_elevation import is_admin, relaunch_vpn_elevated
 except (ImportError, ValueError):
     from app_config import Config
-    from core import Orchestrator, ComponentState
+    from core import Orchestrator, ComponentState, ComponentOwnership
     from health import HealthMonitor, HealthStatus
     from hotkey import (GlobalHotkey, HotkeyChoice, NextKeyCapture, VK_H, VK_G,
                         VK_F8, VK_F9, SHORTCUT_MODIFIERS, load_hotkey_choices,
                         save_hotkey_choices)
+    from windows_elevation import is_admin, relaunch_vpn_elevated
 
 logger = logging.getLogger("happ_suite.tray")
 
@@ -164,7 +166,7 @@ class TrayApp:
             return
 
         states = (
-            (self._happ_icon, self.orchestrator.happ.state, "H", self._happ_tooltip()),
+            (self._happ_icon, self.orchestrator.happ.state, "V", self._happ_tooltip()),
             (self._gemini_icon, self.orchestrator.ag_unlocker.state, "G", self._gemini_tooltip()),
         )
         for icon, state, letter, title in states:
@@ -187,7 +189,7 @@ class TrayApp:
             ComponentState.STOPPED:   "⚪",
         }
         em = icons.get(state, "⚪")
-        return f"{em} {self._hotkey_choices['happ'].label} — Happ VPN  [{state.value}]"
+        return f"{em} {self._hotkey_choices['happ'].label} — VPN  [{state.value}]"
 
     def _ag_label(self) -> str:
         state = self.orchestrator.ag_unlocker.state
@@ -251,7 +253,7 @@ class TrayApp:
             ComponentState.ERROR: "Ошибка VPN",
             ComponentState.STOPPED: "VPN выключен",
         }
-        return "HAPP — " + labels.get(self.orchestrator.happ.state, "состояние неизвестно")
+        return "VPN — " + labels.get(self.orchestrator.happ.state, "состояние неизвестно")
 
     def _gemini_tooltip(self) -> str:
         labels = {
@@ -284,7 +286,7 @@ class TrayApp:
         icon.visible = True
         happ_key = self._hotkey_choices["happ"].label
         gemini_key = self._hotkey_choices["gemini"].label
-        self._notify(icon, f"{happ_key} — HAPP VPN   •   {gemini_key} — Gemini relay", "Happ Suite запущен")
+        self._notify(icon, f"{happ_key} — VPN   •   {gemini_key} — Gemini relay", "Happ Suite запущен")
 
     # ── Menu ──────────────────────────────────────────────────────────────────
 
@@ -297,7 +299,7 @@ class TrayApp:
         items = [
             pystray.MenuItem(lambda item: self._happ_label(), on_toggle),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Горячая клавиша HAPP", self._shortcut_menu("happ")),
+            pystray.MenuItem("Горячая клавиша VPN", self._shortcut_menu("happ")),
             pystray.Menu.SEPARATOR,
         ]
         if self.on_open_dashboard:
@@ -413,8 +415,8 @@ class TrayApp:
     def _on_happ_shortcut(self):
         if self._capture_active:
             return
-        logger.info("Global %s hotkey received → toggle Happ VPN", self._hotkey_choices["happ"].label)
-        self._notify(self._notification_icon("happ"), "Переключаю VPN…", "HAPP")
+        logger.info("Global %s hotkey received → toggle VPN", self._hotkey_choices["happ"].label)
+        self._notify(self._notification_icon("happ"), "Переключаю VPN…", "VPN")
         self._schedule_toggle_happ()
 
     def _on_gemini_shortcut(self):
@@ -428,6 +430,35 @@ class TrayApp:
 
     def _schedule_toggle_happ(self):
         """Schedule Happ VPN toggle in a background thread."""
+        component = self.orchestrator.happ
+        backend = getattr(getattr(self, "config", None), "vpn_backend", "happ")
+        if backend == "mihomo":
+            observed = component.read_status(with_external_probe=False)
+            connect_requested = not observed.route.through_happ
+            if hasattr(component, "observe"):
+                component.observe(
+                    ComponentState.RUNNING if observed.connected else
+                    ComponentState.DEGRADED if observed.route.through_happ else
+                    ComponentState.STOPPED,
+                    preserve_transition=True,
+                )
+        else:
+            connect_requested = component.state not in (ComponentState.RUNNING, ComponentState.DEGRADED)
+        needs_elevation = (
+            backend == "mihomo" and not is_admin()
+            and (connect_requested or component.ownership == ComponentOwnership.SUITE)
+        )
+        if needs_elevation:
+            elevated, result = relaunch_vpn_elevated(connect=connect_requested)
+            if elevated:
+                self._notify(self._notification_icon("happ"),
+                             "Подтвердите запрос UAC. Suite перезапустится и выполнит команду VPN.", "VPN")
+                self._action_exit()
+            else:
+                logger.warning("Could not start elevated Suite (ShellExecute result %s)", result)
+                self._notify(self._notification_icon("happ"),
+                             "Для системного TUN нужно подтвердить UAC и перезапустить Suite.", "VPN")
+            return
         if not self._action_lock.acquire(blocking=False):
             # If we're in the middle of starting, allow cancel
             if self.orchestrator.happ.state == ComponentState.STARTING:
@@ -443,16 +474,19 @@ class TrayApp:
                 if not ok:
                     logger.error("Happ VPN toggle did not reach the requested state")
                     self._notify(self._notification_icon("happ"), "Не удалось переключить VPN. Подробности в журнале.", "HAPP — ошибка")
+                elif (getattr(self.orchestrator.happ, "ownership", ComponentOwnership.UNKNOWN)
+                      != ComponentOwnership.SUITE
+                      and getattr(getattr(self.orchestrator.happ, "desired_state", None), "value", None) == "off"
+                      and self.orchestrator.happ.state in (ComponentState.RUNNING, ComponentState.DEGRADED)):
+                    self._notify(self._notification_icon("happ"),
+                                 "Внешний туннель активен. Suite оставил его без изменений.", "VPN")
                 elif self.orchestrator.happ.state == ComponentState.RUNNING:
                     self._notify(self._notification_icon("happ"), "VPN подключён.", "HAPP")
                 elif self.orchestrator.happ.state == ComponentState.STOPPED:
                     self._notify(self._notification_icon("happ"), "VPN отключён.", "HAPP")
                 else:
                     self._notify(self._notification_icon("happ"), "Состояние VPN не подтверждено.", "HAPP")
-                if self.orchestrator.desired_enabled or self.orchestrator.ag_unlocker.requested_enabled:
-                    self.health_monitor.start()
-                else:
-                    self.health_monitor.stop()
+                self.health_monitor.start()
             except Exception:
                 logger.exception("Happ VPN toggle failed")
                 self.orchestrator.happ.set_state(ComponentState.ERROR)
@@ -481,10 +515,7 @@ class TrayApp:
                     self._notify(self._notification_icon("gemini"), "Gemini готов.", "Gemini")
                 else:
                     self._notify(self._notification_icon("gemini"), "Relay запущен; ответ Gemini пока не подтверждён.", "Gemini")
-                if self.orchestrator.desired_enabled or self.orchestrator.ag_unlocker.requested_enabled:
-                    self.health_monitor.start()
-                else:
-                    self.health_monitor.stop()
+                self.health_monitor.start()
             except Exception:
                 logger.exception("AG Unlocker toggle failed")
                 self.orchestrator.ag_unlocker.set_state(ComponentState.ERROR)
@@ -502,10 +533,7 @@ class TrayApp:
         success = self.orchestrator.start_all()
         if not success:
             logger.error("Happ Suite could not enable every requested component")
-        if self.orchestrator.desired_enabled or self.orchestrator.ag_unlocker.requested_enabled:
-            self.health_monitor.start()
-        else:
-            self.health_monitor.stop()
+        self.health_monitor.start()
         self._update_icon()
         return success
 
@@ -513,8 +541,7 @@ class TrayApp:
         """Stop all components."""
         logger.info("User action: Stop All")
         disconnected = self.orchestrator.stop_all()
-        if disconnected and not self.orchestrator.ag_unlocker.requested_enabled:
-            self.health_monitor.stop()
+        self.health_monitor.start()
         self._update_icon()
         return disconnected
 
@@ -538,8 +565,8 @@ class TrayApp:
 
         self._happ_icon = pystray.Icon(
             name="HappVPN",
-            icon=_create_icon_image("gray", "H"),
-            title="HAPP — VPN выключен",
+            icon=_create_icon_image("gray", "V"),
+            title="VPN выключен",
             menu=self._build_happ_menu(),
         )
         self._gemini_icon = pystray.Icon(
@@ -568,8 +595,8 @@ class TrayApp:
         else:
             logger.error("%s not registered; it may already be used by another application", gemini_key)
 
-        if self.orchestrator.desired_enabled or self.orchestrator.ag_unlocker.requested_enabled:
-            self.health_monitor.start()
+        # Continue observing externally started components while Suite is idle.
+        self.health_monitor.start()
 
         self._update_icon()
 

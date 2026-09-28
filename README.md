@@ -1,56 +1,29 @@
 # Happ Suite
 
-Панель Windows для управления установленным HAPP VPN и AG Unlocker. Окно можно закрыть: две иконки в трее и горячие клавиши продолжат работать.
+Windows tray controls for Mihomo VPN, Antigravity and Gemini DNS.
 
-## Быстрый запуск
+## Quick start
 
-1. Скачайте архив `HappSuite-setup-…-win-x64.zip`, распакуйте его целиком и запустите `start.exe`.
-2. В окне нажмите **Установить HAPP**, если HAPP отсутствует. Suite скачает официальный установщик HAPP 4.3.0, проверит SHA-256 и откроет его. Завершите установку и запустите HAPP.
-3. Нажмите **Установить AG**. Suite так же скачает оригинальный AG Unlocker 2.17.0.3 и откроет его. В его окне завершите первоначальную настройку и введите действующий ключ именно для этой версии. Для работы с моделью Google Antigravity нужен установленный клиент и вход в аккаунт.
-4. В поле **Подписка HAPP** вставьте свою HTTPS-ссылку и нажмите **Добавить**. Suite передаст ссылку в уже запущенный HAPP. Убедитесь, что подписка появилась в HAPP, и выберите там профиль.
-5. Кнопки **HAPP VPN** и **Antigravity** включают и выключают соответствующие компоненты. При необходимости измените горячие клавиши в нижней части окна.
+1. Run `start.exe` and open **Настройки и установка**.
+2. Select **Install Mihomo**. The pinned Windows compatible release is checked by SHA-256 before installation.
+3. Paste your HTTPS subscription URL and select **Save**. Suite requests it as `mihomo/HappSuite-<version>`, sends a stable random installation HWID, validates the returned Mihomo YAML, and shows the discovered nodes. A browser page response triggers the documented `/mihomo` format endpoint before Suite reports an error.
+4. Select a node if needed, then use the VPN card to connect. Suite builds a local full-tunnel configuration from the fetched profile and confirms the authenticated local API, TUN route, and HTTPS connectivity.
+5. Use **Update nodes** to fetch the latest profile and **Select** to choose a node for the next or current run.
 
-Архив `HappSuite-lite-…-win-x64.zip` рассчитан на компьютер, где HAPP уже установлен: в нём нет кнопки загрузки HAPP. AG Unlocker можно загрузить из окна обоих вариантов. Потребуются Windows 10/11 x64, интернет для первой загрузки, права администратора при установке сторонних компонентов и собственная подписка HAPP.
+Suite accepts a Mihomo YAML profile and does not convert Xray or other subscription formats. There is no `DIRECT` fallback. It never starts a second TUN when another Mihomo or HAPP tunnel is detected, and it stops Mihomo only when the saved process identity still matches the Suite-launched process.
 
-**Официальные программы не встроены в ZIP.** По первому нажатию Suite скачивает неизменённые установщики с GitHub их авторов. Так пользователю не приходится самостоятельно искать файлы, а наш публичный архив не перепубликует чужие исполняемые файлы. Версии закреплены: [HAPP 4.3.0](https://github.com/Happ-proxy/happ-desktop/releases/tag/4.3.0) и [AG Unlocker 2.17.0.3](https://github.com/confeden/Antigravity/releases/tag/v2.17.0.3).
+## HAPP compatibility
 
-## Окно, трей и клавиши
+The default backend is Mihomo. To use an existing HAPP installation, set `vpn_backend` to `happ` in `%LOCALAPPDATA%\HappSuite\local.json`. Suite runs only the selected backend. HAPP installation remains optional and is available from Settings in the setup package.
 
-- По умолчанию **Ctrl+Alt+H** переключает HAPP VPN, **Ctrl+Alt+G** переключает relay AG Unlocker. Настроить их можно в окне или в меню иконок **H** и **G** в системном трее.
-- Для нестандартной клавиши ноутбука нажмите **Своя клавиша** и затем нужную кнопку в течение 10 секунд. Если Windows не выдаёт событие или не разрешает его зарегистрировать, прежняя привязка сохранится.
-- Крестик прячет окно. Чтобы вернуть его, запустите `start.exe` снова или выберите **Открыть окно Happ Suite** в меню трея.
-- Пункт **Запускать с Windows** включает автозапуск после входа в учётную запись. После сна статус обновляется, но автоматическое переподключение VPN не подтверждено.
-- **Gemini Web → Включить DNS** устанавливает Xbox DNS для активного физического Wi-Fi/Ethernet. Windows запрашивает права администратора только на эту операцию. **Вернуть DNS** восстанавливает прежние адреса или автоматическое получение от сети. **Открыть Gemini** открывает сайт в браузере по умолчанию.
+## Runtime data
 
-### Gemini в браузере
+Mihomo, the validated subscription profile, generated configuration, subscription URL (DPAPI protected), random installation HWID, and process ownership records are stored under `%LOCALAPPDATA%\HappSuite\vpn\mihomo`. The subscription URL is fetched by Suite and is never embedded in the Mihomo configuration or written to logs.
 
-Используются адреса, опубликованные на [сайте Xbox DNS](https://xbox-dns.ru/) 28.09.2026: IPv4 `111.88.96.54` и `111.88.96.55`; при наличии IPv6-маршрута также `2a00:ab00:1233:26::50` и `2a00:ab00:1233:26::51`. Это настройка всего выбранного сетевого адаптера, поэтому она действует и на остальные программы, использующие его DNS.
+## Validation
 
-Прежние настройки сохраняются в `%LOCALAPPDATA%\HappSuite\gemini-dns\backup.json` **до** изменения. Они сохраняются после закрытия Suite и перезапуска Windows; для отката используйте **Вернуть DNS**. При смене сети сначала восстановите прежние настройки, затем включите DNS на новом подключении. Если другая программа изменила DNS, Suite сохранит резервную копию и сообщит о конфликте, вместо перезаписи новых настроек. VPN-адаптеры не изменяются.
+Unit tests mock provider responses and do not change routes or start a live TUN. A real connection still requires an available provider response, an administrator-approved TUN start, and no already-running external tunnel.
 
-VPN и собственный безопасный DNS браузера могут иметь приоритет над DNS сетевого адаптера. При необходимости выберите в браузере системный DNS или официальный DoH `https://xbox-dns.ru/dns-query`. Изменение DNS не подтверждает доступ к модели: **Проверить сайт** проверяет только HTTPS, а ответ модели нужно проверить в открытом Gemini под своим Google-аккаунтом. Ошибки HTTP 4xx/5xx не считаются успешной проверкой.
+The desktop build uses Windows per-monitor DPI awareness and a scalable Happ Suite mark for the window and executable icon.
 
-Ссылка подписки не сохраняется в Happ Suite и не записывается в журнал; после передачи поле очищается. HAPP хранит импортированную подписку по своим правилам. Горячие клавиши хранятся в `%LOCALAPPDATA%\HappSuite\hotkeys.json`, журналы — в `%LOCALAPPDATA%\HappSuite\logs`.
-
-## Разработка и сборка
-
-```powershell
-py -3 -m pip install -e . pyinstaller pywin32
-py -3 scripts\build.py --entry start
-py -3 scripts\package_release.py
-```
-
-`dist\start\start.exe` — локальная сборка. `dist\release` содержит два ZIP и файлы SHA-256. Пароли, подписки, локальные журналы, DNS-настройки и исполняемые файлы сторонних авторов в архивы не входят.
-
-Текущий интерфейс HAPP использует уже запущенный экземпляр версии 4.3.0 и его локальный IPC. Подтверждение IPC означает получение команды приложением, а успешное VPN-подключение определяется отдельно по TUN-маршруту и внешнему HTTPS. Для AG Unlocker используется созданное его установщиком задание Windows; копирование одного `ag_dns.exe` не создаёт это задание и не выполняет первоначальную настройку.
-
-## Состояние релиза
-
-Для отдельной сборки Gemini DNS без перезаписи работающей старой версии:
-
-```powershell
-py -3 scripts\build.py --entry start --dist-dir dist\gemini-dns --work-dir build\gemini-dns
-py -3 scripts\package_release.py --source dist\gemini-dns\start
-```
-
-Установка на чистом компьютере, работа стороннего DNS-провайдера и доступ конкретного Google-аккаунта к модели требуют отдельных проверок. Состояние DNS и доступность сайта в окне показываются отдельно.
+See [docs/MIHOMO.md](docs/MIHOMO.md) for implementation details and current limits.

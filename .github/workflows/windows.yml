@@ -1,0 +1,30 @@
+name: Windows validation
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-and-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install application and test dependencies
+        run: python -m pip install -e ".[test]" pyinstaller
+      - name: Run unit tests (no live TUN)
+        run: python -m pytest -q
+      - name: Build Windows dashboard package
+        run: python scripts/build.py --entry start --dist-dir ${{ runner.temp }}/dist --work-dir ${{ runner.temp }}/build
+      - name: Smoke test frozen package imports
+        shell: pwsh
+        run: '& "${{ runner.temp }}/dist/start/start.exe" --help'
+      - name: Validate packaged default configuration
+        shell: pwsh
+        run: |
+          $config = Get-Content "${{ runner.temp }}/dist/start/config/default.json" -Raw | ConvertFrom-Json
+          if ($config.vpn_backend -ne "mihomo") { throw "Mihomo must be the packaged default backend" }
+          if (-not (Test-Path "${{ runner.temp }}/dist/start/start.exe")) { throw "Packaged dashboard executable is missing" }

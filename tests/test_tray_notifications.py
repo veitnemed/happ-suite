@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from src.tray import TrayApp
+from src.core import ComponentOwnership
 
 
 class TrayToggleTests(unittest.TestCase):
@@ -83,6 +84,34 @@ class TrayToggleTests(unittest.TestCase):
             app._schedule_toggle_ag()
             thread.call_args.kwargs["target"]()
         app.orchestrator.toggle_happ.assert_not_called()
+
+    def test_mihomo_connect_requests_elevation_for_connect_action(self):
+        app = self._make_app(through_happ=False)
+        app.config = SimpleNamespace(vpn_backend="mihomo")
+        app.orchestrator.happ.read_status = app.orchestrator.happ.controller.read_status
+        app.orchestrator.happ.ownership = ComponentOwnership.UNKNOWN
+        app._notify = Mock()
+        app._notification_icon = Mock()
+        app._action_exit = Mock()
+        with patch("src.tray.is_admin", return_value=False), \
+             patch("src.tray.relaunch_vpn_elevated", return_value=(True, 42)) as relaunch:
+            app._schedule_toggle_happ()
+        relaunch.assert_called_once_with(connect=True)
+        app._action_exit.assert_called_once_with()
+
+    def test_mihomo_owned_disconnect_requests_elevation_for_stop_action(self):
+        app = self._make_app(through_happ=True)
+        app.config = SimpleNamespace(vpn_backend="mihomo")
+        app.orchestrator.happ.read_status = app.orchestrator.happ.controller.read_status
+        app.orchestrator.happ.ownership = ComponentOwnership.SUITE
+        app._notify = Mock()
+        app._notification_icon = Mock()
+        app._action_exit = Mock()
+        with patch("src.tray.is_admin", return_value=False), \
+             patch("src.tray.relaunch_vpn_elevated", return_value=(True, 42)) as relaunch:
+            app._schedule_toggle_happ()
+        relaunch.assert_called_once_with(connect=False)
+        app._action_exit.assert_called_once_with()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 import argparse
 import ctypes
 import logging
+import os
 import threading
 import tkinter as tk
 
@@ -27,6 +28,29 @@ EVENT_MODIFY_STATE = 0x0002
 WAIT_OBJECT_0 = 0
 
 
+def enable_high_dpi_awareness():
+    """Opt into native per-monitor rendering before creating any Tk windows."""
+    if os.name != "nt":
+        return
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        set_context = user32.SetProcessDpiAwarenessContext
+        set_context.argtypes = (ctypes.c_void_p,)
+        set_context.restype = ctypes.c_bool
+        if set_context(ctypes.c_void_p(-4)):  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        shcore = ctypes.WinDLL("shcore", use_last_error=True)
+        shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
 def _create_show_event():
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.CreateEventW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_wchar_p)
@@ -48,8 +72,11 @@ def _show_existing():
 
 
 def main():
+    enable_high_dpi_awareness()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--background", action="store_true", help="start in the tray after Windows sign-in")
+    parser.add_argument("--elevated-vpn", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--elevated-vpn-stop", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--gemini-dns-helper", choices=("enable", "disable"), help=argparse.SUPPRESS)
     parser.add_argument("--dns-result", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -77,6 +104,14 @@ def main():
             root.withdraw()
         config = Config()
         orchestrator = Orchestrator(config)
+        if args.elevated_vpn and config.vpn_backend == "mihomo":
+            logging.getLogger("happ_suite.start").info("Elevated restart requested the Mihomo connection")
+            if not orchestrator._start_happ_only():
+                logging.getLogger("happ_suite.start").error("Mihomo did not reach a verified connected state")
+        elif args.elevated_vpn_stop and config.vpn_backend == "mihomo":
+            logging.getLogger("happ_suite.start").info("Elevated restart requested the Mihomo disconnection")
+            if not orchestrator._stop_happ_only():
+                logging.getLogger("happ_suite.start").error("Mihomo stop or route recovery was not verified")
         health = HealthMonitor(orchestrator, config)
 
         def show_window():

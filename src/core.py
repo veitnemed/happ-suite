@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import winreg
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -46,17 +47,72 @@ class ComponentState(Enum):
     RECOVERING = "recovering"
 
 
+class DesiredState(Enum):
+    OFF = "off"
+    ON = "on"
+
+
+class ComponentOwnership(Enum):
+    SUITE = "suite"
+    EXTERNAL = "external"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class ComponentRuntimeState:
+    desired_state: DesiredState = DesiredState.OFF
+    observed_state: ComponentState = ComponentState.STOPPED
+    ownership: ComponentOwnership = ComponentOwnership.UNKNOWN
+
+
 class Component:
     """Base class for a managed bypass component."""
 
     def __init__(self, name: str):
         self.name = name
         self.state = ComponentState.STOPPED
+        self.runtime = ComponentRuntimeState()
         self._on_state_change: Optional[Callable] = None
+
+    @property
+    def desired_state(self) -> DesiredState:
+        return self.runtime.desired_state
+
+    @desired_state.setter
+    def desired_state(self, value: DesiredState):
+        self.runtime.desired_state = value
+
+    @property
+    def observed_state(self) -> ComponentState:
+        return self.runtime.observed_state
+
+    @property
+    def ownership(self) -> ComponentOwnership:
+        return self.runtime.ownership
+
+    @ownership.setter
+    def ownership(self, value: ComponentOwnership):
+        self.runtime.ownership = value
+
+    def request_enabled(self, enabled: bool):
+        self.desired_state = DesiredState.ON if enabled else DesiredState.OFF
+
+    def observe(self, state: ComponentState, *, preserve_transition: bool = False):
+        """Record a system observation without changing user intent."""
+        if state in (ComponentState.STARTING, ComponentState.STOPPING, ComponentState.RECOVERING):
+            raise ValueError("transitional states are not observations")
+        self.runtime.observed_state = state
+        if preserve_transition and self.state in (
+            ComponentState.STARTING, ComponentState.STOPPING, ComponentState.RECOVERING
+        ):
+            return
+        self.set_state(state)
 
     def set_state(self, new_state: ComponentState):
         old = self.state
         self.state = new_state
+        if new_state not in (ComponentState.STARTING, ComponentState.STOPPING, ComponentState.RECOVERING):
+            self.runtime.observed_state = new_state
         if self._on_state_change and old != new_state:
             self._on_state_change(self.name, old, new_state)
 
@@ -121,22 +177,55 @@ class ZapretComponent(Component):
         super().__init__("Zapret")
         self.config = config
         self._process: Optional[subprocess.Popen] = None
+        self._owned_winws: Dict[int, Tuple[float, str]] = {}
+
+    @staticmethod
+    def _winws_processes() -> Optional[Dict[int, Tuple[float, str]]]:
+        """Return process identities, or None when ownership cannot be checked."""
+        try:
+            import psutil
+            found = {}
+            for proc in psutil.process_iter(["name", "pid", "create_time", "exe"]):
+                try:
+                    name = proc.info.get("name")
+                    if name and name.lower() == "winws.exe":
+                        pid = int(proc.info["pid"])
+                        created = float(proc.info["create_time"])
+                        executable = os.path.normcase(os.path.abspath(proc.info["exe"]))
+                        found[pid] = (created, executable)
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                    continue
+                except Exception:
+                    return None
+            return found
+        except Exception:
+            logger.debug("Could not establish winws.exe process ownership", exc_info=True)
+            return None
 
     def is_running(self) -> bool:
         """Check if winws.exe is running (any instance)."""
-        try:
-            import psutil
-            for proc in psutil.process_iter(["name"]):
-                if proc.info["name"] and proc.info["name"].lower() == "winws.exe":
-                    return True
-        except Exception:
-            pass
-        return False
+        processes = self._winws_processes()
+        return bool(processes)
 
     def start(self) -> bool:
         """Start zapret if not already running."""
-        if self.is_running():
-            self.set_state(ComponentState.RUNNING)
+        self.request_enabled(True)
+        before = self._winws_processes()
+        if before is None:
+            self.ownership = ComponentOwnership.UNKNOWN
+            self.observe(ComponentState.DEGRADED)
+            logger.warning("Cannot safely determine existing winws.exe ownership; refusing to start Zapret")
+            return False
+        if before:
+            self._owned_winws = {
+                pid: identity for pid, identity in self._owned_winws.items()
+                if before.get(pid) == identity
+            }
+            self.ownership = (
+                ComponentOwnership.SUITE if self._owned_winws
+                else ComponentOwnership.EXTERNAL
+            )
+            self.observe(ComponentState.RUNNING)
             logger.info("Zapret already running (winws.exe found)")
             return True
 
@@ -156,6 +245,7 @@ class ZapretComponent(Component):
         self.set_state(ComponentState.STARTING)
         logger.info(f"Starting Zapret with strategy: {strategy}")
         try:
+            launch_started = time.time() - 1.0
             self._process = subprocess.Popen(
                 ["cmd.exe", "/c", bat_path],
                 cwd=zapret_dir,
@@ -164,30 +254,76 @@ class ZapretComponent(Component):
                 stderr=subprocess.DEVNULL,
             )
             time.sleep(2)
-            if self.is_running():
-                self.set_state(ComponentState.RUNNING)
+            after = self._winws_processes()
+            try:
+                root = os.path.normcase(os.path.abspath(zapret_dir))
+                launched = {
+                    pid: identity for pid, identity in (after or {}).items()
+                    if pid not in before
+                    and identity[0] >= launch_started
+                    and os.path.commonpath([root, identity[1]]) == root
+                }
+            except (OSError, ValueError):
+                launched = {}
+            if launched:
+                self._owned_winws = launched
+                self.ownership = ComponentOwnership.SUITE
+                self.observe(ComponentState.RUNNING)
                 logger.info("Zapret started successfully")
                 return True
-            else:
-                self.set_state(ComponentState.ERROR)
-                logger.error("Zapret failed to start (winws.exe not found after launch)")
+            if after:
+                self.ownership = ComponentOwnership.UNKNOWN
+                self.observe(ComponentState.DEGRADED)
+                logger.error("winws.exe is active but could not be attributed safely to this Suite start")
                 return False
+            self.ownership = ComponentOwnership.UNKNOWN
+            self.observe(ComponentState.ERROR)
+            logger.error("Zapret failed to start (winws.exe not found after launch)")
+            return False
         except Exception as e:
+            self.ownership = ComponentOwnership.UNKNOWN
             self.set_state(ComponentState.ERROR)
             logger.error(f"Zapret start failed: {e}")
             return False
 
     def stop(self):
         """Stop zapret."""
+        self.request_enabled(False)
+        if self.ownership != ComponentOwnership.SUITE or not self._owned_winws:
+            logger.info("Leaving non-Suite-owned Zapret process untouched")
+            return True
+        current = self._winws_processes()
+        if current is None:
+            self.ownership = ComponentOwnership.UNKNOWN
+            logger.warning("Could not verify Zapret process identities; refusing to stop winws.exe")
+            return False
         try:
             import psutil
-            for proc in psutil.process_iter(["name", "pid"]):
-                if proc.info["name"] and proc.info["name"].lower() == "winws.exe":
-                    proc.kill()
-                    logger.info(f"Killed winws.exe (PID {proc.info['pid']})")
+            for pid, (created, executable) in tuple(self._owned_winws.items()):
+                if current.get(pid) != (created, executable):
+                    continue
+                proc = psutil.Process(pid)
+                if (float(proc.create_time()), os.path.normcase(os.path.abspath(proc.exe()))) != (created, executable):
+                    continue
+                proc.terminate()
+                proc.wait(timeout=5)
+                logger.info("Stopped Suite-owned winws.exe (PID %s)", pid)
+            self._owned_winws.clear()
+            remaining = self._winws_processes()
+            if remaining is None:
+                self.ownership = ComponentOwnership.UNKNOWN
+                self.observe(ComponentState.DEGRADED)
+            elif remaining:
+                self.ownership = ComponentOwnership.EXTERNAL
+                self.observe(ComponentState.RUNNING)
+            else:
+                self.ownership = ComponentOwnership.UNKNOWN
+                self.observe(ComponentState.STOPPED)
+            return True
         except Exception as e:
-            logger.warning(f"Failed to stop Zapret: {e}")
-        self.set_state(ComponentState.STOPPED)
+            self.ownership = ComponentOwnership.UNKNOWN
+            logger.warning("Failed to stop Suite-owned Zapret process safely: %s", e)
+            return False
 
 
 # ─── Happ VPN Component ───────────────────────────────────────
@@ -244,6 +380,7 @@ class HappVPNComponent(Component):
 
     def start(self, server: Optional[Dict] = None) -> bool:
         """Connect the profile already selected in HAPP through its existing GUI."""
+        self.request_enabled(True)
         if server is not None:
             logger.error("HAPP profile selection is not verified; static config IDs are ignored")
             self.set_state(ComponentState.ERROR)
@@ -255,17 +392,33 @@ class HappVPNComponent(Component):
         try:
             observed = self.controller.read_status()
             if observed.connected:
-                self.set_state(ComponentState.RUNNING)
+                if self.ownership == ComponentOwnership.UNKNOWN:
+                    self.ownership = ComponentOwnership.EXTERNAL
+                self.observe(ComponentState.RUNNING)
                 return True
+            if observed.route.through_happ:
+                if self.ownership == ComponentOwnership.UNKNOWN:
+                    self.ownership = ComponentOwnership.EXTERNAL
+                self.observe(ComponentState.DEGRADED)
+                logger.warning("HAPP route is active but unverified; leaving the existing session untouched")
+                return False
             if observed.gui_pid is None:
+                self.ownership = ComponentOwnership.UNKNOWN
                 logger.error("Existing Happ.exe GUI IPC is unavailable; no second GUI is started")
                 self.set_state(ComponentState.ERROR)
                 return False
             connected = self.controller.connect_current_profile()
             if self.cancel_requested.is_set():
-                self.controller.disconnect()
-                self.set_state(ComponentState.STOPPED)
+                if connected:
+                    self.ownership = ComponentOwnership.SUITE
+                    self.controller.disconnect()
+                    self.ownership = ComponentOwnership.UNKNOWN
+                    self.observe(ComponentState.STOPPED)
+                else:
+                    self.ownership = ComponentOwnership.UNKNOWN
+                    self.observe(ComponentState.ERROR)
                 return False
+            self.ownership = ComponentOwnership.SUITE if connected else ComponentOwnership.UNKNOWN
             self.set_state(ComponentState.RUNNING if connected else ComponentState.ERROR)
             if not connected:
                 logger.error("HAPP accepted connect but TUN route and HTTPS were not verified")
@@ -276,13 +429,20 @@ class HappVPNComponent(Component):
             return False
 
     def stop(self) -> bool:
-        return self.disconnect()
+        return self.stop_owned()
 
     def disconnect(self) -> bool:
         """Disconnect HAPP's tunnel without closing the existing GUI process."""
+        self.request_enabled(False)
+        if self.ownership != ComponentOwnership.SUITE:
+            logger.info("Leaving non-Suite-owned HAPP tunnel untouched")
+            self.set_state(ComponentState.ERROR)
+            return False
         self.set_state(ComponentState.STOPPING)
         try:
             disconnected = self.controller.disconnect()
+            if disconnected:
+                self.ownership = ComponentOwnership.UNKNOWN
             self.set_state(ComponentState.STOPPED if disconnected else ComponentState.ERROR)
             if not disconnected:
                 logger.error("HAPP accepted disconnect but the TUN route remained active")
@@ -293,7 +453,11 @@ class HappVPNComponent(Component):
             return False
 
     def stop_owned(self) -> bool:
-        """Compatibility entry point: F8 may disconnect a preexisting session."""
+        """Stop a HAPP session only when this Suite instance started it."""
+        self.request_enabled(False)
+        if self.ownership != ComponentOwnership.SUITE:
+            logger.info("HAPP stop requested, but Suite does not own the active session")
+            return True
         return self.disconnect()
 
     def switch_server(self, server: Dict) -> bool:
@@ -330,7 +494,15 @@ class AGUnlockerComponent(Component):
         self.config = config
         self.activation_unix: float = 0.0
         self.started_task_this_session = False
-        self.requested_enabled = False
+
+    @property
+    def requested_enabled(self) -> bool:
+        """Compatibility view used by the existing UI."""
+        return self.desired_state == DesiredState.ON
+
+    @requested_enabled.setter
+    def requested_enabled(self, enabled: bool):
+        self.request_enabled(bool(enabled))
 
     def is_running(self) -> bool:
         """Require both the AG unlocker process and its local listener."""
@@ -351,15 +523,20 @@ class AGUnlockerComponent(Component):
 
     def start(self) -> bool:
         """Ensure the installer's headless Task Scheduler relay is available."""
+        self.request_enabled(True)
         self.activation_unix = time.time()
-        self.requested_enabled = True
         result = ensure_dns_relay()
-        self.started_task_this_session |= result.started_by_suite
+        self.started_task_this_session = bool(result.started_by_suite)
+        self.ownership = (
+            ComponentOwnership.SUITE if result.started_by_suite else
+            ComponentOwnership.EXTERNAL if result.ready else
+            ComponentOwnership.UNKNOWN
+        )
         if not result.ready:
             logger.error("AG Unlocker DNS relay unavailable: %s", result.reason)
-            self.set_state(ComponentState.ERROR)
+            self.observe(ComponentState.ERROR)
             return False
-        self.set_state(ComponentState.DEGRADED)
+        self.observe(ComponentState.DEGRADED)
         return True
 
     def model_verified(self) -> bool:
@@ -369,11 +546,16 @@ class AGUnlockerComponent(Component):
 
     def stop(self):
         """Stop only the installed relay task; F9 can restart it later."""
+        self.request_enabled(False)
+        if self.ownership != ComponentOwnership.SUITE or not self.started_task_this_session:
+            logger.info("AG Unlocker stop requested, but Suite does not own the relay")
+            return True
         self.set_state(ComponentState.STOPPING)
         result = stop_dns_relay()
         if result.ready:
             self.activation_unix = 0.0
-            self.requested_enabled = False
+            self.started_task_this_session = False
+            self.ownership = ComponentOwnership.UNKNOWN
             self.set_state(ComponentState.STOPPED)
             return True
         logger.error("AG Unlocker relay could not stop: %s", result.reason)
@@ -398,12 +580,29 @@ class Orchestrator:
     def __init__(self, config: Config):
         self.config = config
         self.zapret = ZapretComponent(config)
-        self.happ = HappVPNComponent(config)
+        if getattr(config, "vpn_backend", "mihomo").casefold() == "happ":
+            self.vpn = HappVPNComponent(config)
+        else:
+            try:
+                from .mihomo_backend import MihomoVPNComponent
+            except ImportError:
+                from mihomo_backend import MihomoVPNComponent
+            self.vpn = MihomoVPNComponent(config)
+        # Compatibility alias used by the existing tray and dashboard.
+        self.happ = self.vpn
         self.ag_unlocker = AGUnlockerComponent(config)
 
         self._components: List[Component] = [self.zapret, self.happ, self.ag_unlocker]
         self._on_state_change: Optional[Callable] = None
-        self.desired_enabled = False
+
+    @property
+    def desired_enabled(self) -> bool:
+        """Compatibility view: the legacy global toggle represents HAPP intent."""
+        return self.happ.desired_state == DesiredState.ON
+
+    @desired_enabled.setter
+    def desired_enabled(self, enabled: bool):
+        self.happ.request_enabled(bool(enabled))
 
     def on_state_change(self, callback: Callable):
         """Register a callback for component state changes."""
@@ -444,11 +643,18 @@ class Orchestrator:
                 self.ag_unlocker.set_state(ComponentState.ERROR)
                 unlocker_ok = False
 
-        happ_status = self.happ.get_status()
+        if isinstance(self.happ, HappVPNComponent):
+            happ_status = self.happ.get_status()
+            route_name = happ_status["route_interface"]
+            verified = happ_status["tunnel_verified"]
+        else:
+            observed = self.happ.read_status()
+            route_name = observed.route.interface_alias
+            verified = observed.connected
         logger.info(
-            "=== Start complete. HAPP route: %s, tunnel verified: %s, AG Unlocker: %s ===",
-            happ_status["route_interface"],
-            happ_status["tunnel_verified"],
+            "=== Start complete. VPN route: %s, tunnel verified: %s, AG Unlocker: %s ===",
+            route_name,
+            verified,
             "RESPONSIVE" if unlocker_ok else "UNAVAILABLE",
         )
         return unlocker_ok and happ_ok
@@ -458,8 +664,7 @@ class Orchestrator:
         logger.info("=== Stopping all components ===")
         self.happ.cancel_requested.set()
         disconnected = self.happ.stop_owned()
-        if disconnected:
-            self.desired_enabled = False
+        self.happ.request_enabled(False)
         logger.info("=== VPN disconnected: %s ===", disconnected)
         return disconnected
 
@@ -472,8 +677,11 @@ class Orchestrator:
 
     def toggle_happ(self) -> bool:
         """Toggle only the Happ VPN tunnel without touching AG Unlocker."""
-        observed = self.happ.controller.read_status(with_external_probe=False)
+        controller = self.happ if hasattr(self.happ, "read_status") else self.happ.controller
+        observed = controller.read_status(with_external_probe=False)
         if observed.route.through_happ:
+            if self.happ.ownership == ComponentOwnership.UNKNOWN:
+                self.happ.ownership = ComponentOwnership.EXTERNAL
             return self._stop_happ_only()
         else:
             return self._start_happ_only()
@@ -492,16 +700,17 @@ class Orchestrator:
         logger.info("=== Stopping Happ VPN only ===")
         self.happ.cancel_requested.set()
         disconnected = self.happ.stop_owned()
-        if disconnected:
-            # If Happ is off, the suite is no longer desired-enabled.
-            # AG Unlocker may still run on its own — don't force-stop it.
-            self.desired_enabled = False
+        self.happ.request_enabled(False)
         logger.info("=== Happ VPN stop: %s ===", "OK" if disconnected else "FAILED")
         return disconnected
 
     def toggle_ag_unlocker(self) -> bool:
         """Toggle only AG Unlocker without touching Happ VPN."""
-        if self.ag_unlocker.state in (ComponentState.RUNNING, ComponentState.DEGRADED):
+        if (
+            self.ag_unlocker.observed_state in (ComponentState.RUNNING, ComponentState.DEGRADED)
+            or (self.ag_unlocker.ownership == ComponentOwnership.SUITE
+                and self.ag_unlocker.started_task_this_session)
+        ):
             return self._stop_ag_only()
         else:
             return self._start_ag_only()
@@ -535,14 +744,36 @@ class Orchestrator:
 
     def refresh_status(self):
         """Read current service state without starting or stopping anything."""
-        observed = self.happ.controller.read_status()
-        self.desired_enabled = observed.route.through_happ
-        self.happ.set_state(
+        controller = self.happ if hasattr(self.happ, "read_status") else self.happ.controller
+        observed = controller.read_status()
+        if observed.route.through_happ and self.happ.ownership == ComponentOwnership.UNKNOWN:
+            self.happ.ownership = ComponentOwnership.EXTERNAL
+        self.happ.observe(
             ComponentState.RUNNING if observed.connected else
             ComponentState.DEGRADED if observed.route.through_happ else
-            ComponentState.STOPPED
+            ComponentState.STOPPED,
+            preserve_transition=True,
         )
-        self.ag_unlocker.set_state(
-            ComponentState.DEGRADED if self.ag_unlocker.is_running() else ComponentState.STOPPED
+
+        unlocker_up = self.ag_unlocker.is_running()
+        if unlocker_up and self.ag_unlocker.ownership == ComponentOwnership.UNKNOWN:
+            self.ag_unlocker.ownership = ComponentOwnership.EXTERNAL
+        if not unlocker_up:
+            self.ag_unlocker.ownership = ComponentOwnership.UNKNOWN
+        self.ag_unlocker.observe(
+            ComponentState.DEGRADED if unlocker_up else ComponentState.STOPPED,
+            preserve_transition=True,
         )
-        self.ag_unlocker.requested_enabled = self.ag_unlocker.state != ComponentState.STOPPED
+
+        zapret_processes = self.zapret._winws_processes()
+        if zapret_processes:
+            if self.zapret.ownership == ComponentOwnership.UNKNOWN:
+                self.zapret.ownership = ComponentOwnership.EXTERNAL
+            self.zapret.observe(ComponentState.RUNNING, preserve_transition=True)
+        elif zapret_processes == {}:
+            self.zapret.ownership = ComponentOwnership.UNKNOWN
+            self.zapret._owned_winws.clear()
+            self.zapret.observe(ComponentState.STOPPED, preserve_transition=True)
+        else:
+            self.zapret.ownership = ComponentOwnership.UNKNOWN
+            self.zapret.observe(ComponentState.DEGRADED, preserve_transition=True)

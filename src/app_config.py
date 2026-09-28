@@ -71,6 +71,8 @@ class Config:
             raise FileNotFoundError(f"Happ Suite configuration is missing: {default_path}")
         else:
             self._data = {
+                "vpn_backend": "mihomo",
+                "mihomo_wait_timeout_sec": 50,
                 "happ_exe": r"C:\Program Files\FlyFrogLLC\Happ\Happ.exe",
                 "proxy_port": 10809,
                 "proxy_url": "http://127.0.0.1:10809",
@@ -111,6 +113,20 @@ class Config:
     @property
     def happ_exe(self) -> str:
         return self._data.get("happ_exe", r"C:\Program Files\FlyFrogLLC\Happ\Happ.exe")
+
+    @property
+    def vpn_backend(self) -> str:
+        value = str(self._data.get("vpn_backend", "mihomo")).casefold()
+        return value if value in {"mihomo", "happ"} else "mihomo"
+
+    @property
+    def mihomo_wait_timeout(self) -> int:
+        return int(self._data.get("mihomo_wait_timeout_sec", 50))
+
+    @property
+    def mihomo_subscription_url(self) -> str:
+        # URLs can contain credentials. Do not put one in checked-in defaults.
+        return str(self._data.get("mihomo_subscription_url", ""))
 
     @property
     def proxy_port(self) -> int:

@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from src.core import ComponentState, HappVPNComponent
+from src.core import ComponentOwnership, ComponentState, HappVPNComponent
 from src.happ_controller import HappStatus
 from src.happ_ipc import _init_message, _server_name
 from src.happ_status import TunnelRoute
@@ -28,6 +28,7 @@ class HappAdapterTests(unittest.TestCase):
         self.component.controller.read_status.return_value = self._status(True)
         self.assertTrue(self.component.start())
         self.assertEqual(self.component.state, ComponentState.RUNNING)
+        self.assertEqual(self.component.ownership, ComponentOwnership.EXTERNAL)
         self.component.controller.connect_current_profile.assert_not_called()
 
     def test_connect_uses_existing_gui_controller(self):
@@ -44,7 +45,8 @@ class HappAdapterTests(unittest.TestCase):
         launch.assert_not_called()
         self.assertEqual(self.component.state, ComponentState.ERROR)
 
-    def test_disconnection_of_preexisting_tunnel_uses_gui_command(self):
+    def test_disconnection_of_suite_owned_tunnel_uses_gui_command(self):
+        self.component.ownership = ComponentOwnership.SUITE
         self.component.controller.disconnect.return_value = True
         self.assertTrue(self.component.stop_owned())
         self.component.controller.disconnect.assert_called_once()

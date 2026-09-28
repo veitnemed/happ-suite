@@ -37,6 +37,14 @@ def _single_instance_handle():
     if not handle:
         raise OSError("Cannot create Happ Suite instance mutex")
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        if "--elevated-vpn" in sys.argv or "--elevated-vpn-stop" in sys.argv:
+            # The unelevated tray exits after UAC succeeds. Wait for its mutex
+            # to be released before the elevated tray takes ownership.
+            kernel32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+            kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+            wait_result = kernel32.WaitForSingleObject(handle, 30000)
+            if wait_result in (0, 0x80):  # WAIT_OBJECT_0 / WAIT_ABANDONED
+                return handle
         kernel32.CloseHandle(handle)
         return None
     return handle
@@ -116,6 +124,15 @@ def main():
 
     # Create orchestrator
     orchestrator = Orchestrator(config)
+
+    if "--elevated-vpn" in sys.argv and config.vpn_backend == "mihomo":
+        logger.info("Elevated restart requested the Mihomo connection")
+        if not orchestrator._start_happ_only():
+            logger.error("Mihomo did not reach a verified connected state")
+    elif "--elevated-vpn-stop" in sys.argv and config.vpn_backend == "mihomo":
+        logger.info("Elevated restart requested the Mihomo disconnection")
+        if not orchestrator._stop_happ_only():
+            logger.error("Mihomo stop or route recovery was not verified")
 
     # Create health monitor
     health_monitor = HealthMonitor(orchestrator, config)
