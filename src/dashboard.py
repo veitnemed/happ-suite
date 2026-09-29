@@ -38,17 +38,18 @@ except ImportError:
     from vpn_backend import NetworkUnavailableError, ProviderFormatError, SubscriptionError
 
 
-BG = "#0B1016"
-CARD = "#121A24"
-CARD_RAISED = "#17212D"
-FIELD = "#0E151E"
-TEXT = "#F3F6F8"
-MUTED = "#91A0AF"
-BLUE = "#9AAEFF"
-GREEN = "#76E0BD"
-YELLOW = "#F0C979"
-RED = "#F17D83"
-LINE = "#263442"
+BG = "#F7F8F9"
+SIDEBAR = "#F0F2F4"
+CARD = "#FFFFFF"
+FIELD = "#FFFFFF"
+TEXT = "#20272D"
+MUTED = "#68747E"
+BLUE = "#345F7D"
+GREEN = "#32805C"
+YELLOW = "#A87628"
+RED = "#B94F4F"
+LINE = "#DCE2E6"
+SELECTED = "#E2EAF0"
 FONT = "Segoe UI"
 logger = logging.getLogger("happ_suite.dashboard")
 
@@ -107,12 +108,14 @@ class Dashboard:
 
     def _button(self, parent, text, command, *, filled=False, width=15):
         return tk.Button(parent, text=text, command=command, width=width,
-                         font=(FONT, 9, "bold"), relief="flat", bd=0,
-                         bg=GREEN if filled else CARD_RAISED, fg=BG if filled else TEXT,
-                         activebackground="#99EBD0" if filled else "#263545",
-                         activeforeground=BG if filled else TEXT, cursor="hand2",
-                         padx=self._px(13), pady=self._px(9),
-                         highlightthickness=0, takefocus=True)
+                         font=(FONT, 9, "normal"), relief="flat", bd=0,
+                         bg=BLUE if filled else CARD, fg="#FFFFFF" if filled else TEXT,
+                         activebackground="#284D67" if filled else SELECTED,
+                         activeforeground="#FFFFFF" if filled else TEXT, cursor="hand2",
+                         padx=self._px(11), pady=self._px(7),
+                         highlightthickness=1,
+                         highlightbackground=BLUE if filled else LINE,
+                         highlightcolor=BLUE, takefocus=True)
 
     def _build(self):
         root = self.root
@@ -120,71 +123,71 @@ class Dashboard:
         root.configure(bg=BG)
         icon = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(icon)
-        draw.rounded_rectangle((2, 2, 62, 62), radius=18, fill=GREEN)
+        draw.rounded_rectangle((2, 2, 62, 62), radius=10, fill="#34414B")
         try:
             font = ImageFont.truetype(r"C:\Windows\Fonts\segoeuib.ttf", 22)
         except OSError:
             font = ImageFont.load_default()
-        draw.text((32, 32), "GPT", fill=BG, anchor="mm", font=font)
+        draw.text((32, 32), "GPT", fill="#FFFFFF", anchor="mm", font=font)
         self._window_icon = ImageTk.PhotoImage(icon, master=root)
         root.iconphoto(True, self._window_icon)
         screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
-        width = min(self._px(1040), screen_w - self._px(48))
-        height = min(self._px(730), screen_h - self._px(64))
+        width = min(self._px(960), screen_w - self._px(48))
+        height = min(self._px(680), screen_h - self._px(64))
         root.geometry(f"{width}x{height}")
-        root.minsize(min(self._px(860), width), min(self._px(620), height))
+        root.minsize(min(self._px(820), width), min(self._px(590), height))
         root.protocol("WM_DELETE_WINDOW", root.withdraw)
         style = ttk.Style(root)
-        # The native Windows combobox ignores most dark palette settings.
+        # Clam permits consistent field and list colors on Windows.
         if "clam" in style.theme_names():
             style.theme_use("clam")
         style.configure("Suite.TCombobox", fieldbackground=FIELD, background=FIELD,
                         foreground=TEXT, arrowcolor=MUTED, bordercolor=LINE,
-                        lightcolor=LINE, darkcolor=LINE, padding=self._px(7),
+                        lightcolor=LINE, darkcolor=LINE, padding=self._px(6),
                         font=(FONT, 9))
         style.map("Suite.TCombobox", fieldbackground=[("readonly", FIELD)],
                   foreground=[("readonly", TEXT)],
                   background=[("readonly", FIELD)],
-                  arrowcolor=[("readonly", GREEN)])
+                  arrowcolor=[("readonly", BLUE)])
         root.option_add("*TCombobox*Listbox.background", FIELD)
         root.option_add("*TCombobox*Listbox.foreground", TEXT)
-        root.option_add("*TCombobox*Listbox.selectBackground", "#263545")
+        root.option_add("*TCombobox*Listbox.selectBackground", SELECTED)
         root.option_add("*TCombobox*Listbox.selectForeground", TEXT)
         root.option_add("*TCombobox*Listbox.font", (FONT, 10))
 
-        content = tk.Frame(root, bg=BG, padx=self._px(24), pady=self._px(20))
+        content = tk.Frame(root, bg=BG, padx=self._px(22), pady=self._px(18))
         content.pack(fill="both", expand=True)
         header = tk.Frame(content, bg=BG)
         header.pack(fill="x")
         brand = tk.Frame(header, bg=BG)
         brand.pack(side="left", fill="x", expand=True)
-        mark = tk.Canvas(brand, width=self._px(48), height=self._px(48), bg=BG,
+        mark = tk.Canvas(brand, width=self._px(36), height=self._px(36), bg=BG,
                          bd=0, highlightthickness=0)
-        mark.pack(side="left", padx=(0, self._px(12)))
+        mark.pack(side="left", padx=(0, self._px(10)))
         self._draw_logo(mark)
         title_group = tk.Frame(brand, bg=BG)
         title_group.pack(side="left", anchor="center")
-        self._label(title_group, "Relay Studio", size=19, weight="bold").pack(anchor="w")
-        self._label(title_group, "GPT  /  GEMINI  /  SECURE ACCESS", size=8,
-                    color=MUTED, weight="bold").pack(anchor="w", pady=(1, 0))
-        self._button(header, "Скрыть в трей", root.withdraw, width=15).pack(side="right", anchor="center")
+        self._label(title_group, "Relay Studio", size=16, weight="bold").pack(anchor="w")
+        self._label(title_group, "Управление подключениями", size=9,
+                    color=MUTED).pack(anchor="w", pady=(1, 0))
+        self._button(header, "Свернуть в трей", root.withdraw, width=16).pack(side="right", anchor="center")
 
         body = tk.Frame(content, bg=BG)
-        body.pack(fill="both", expand=True, pady=(self._px(20), 0))
-        sidebar = tk.Frame(body, bg=CARD, width=self._px(238), padx=self._px(14), pady=self._px(17),
+        body.pack(fill="both", expand=True, pady=(self._px(17), 0))
+        sidebar = tk.Frame(body, bg=SIDEBAR, width=self._px(220), padx=self._px(10), pady=self._px(15),
                            highlightthickness=1, highlightbackground=LINE)
-        sidebar.pack(side="left", fill="y", padx=(0, self._px(16)))
+        sidebar.pack(side="left", fill="y", padx=(0, self._px(18)))
         sidebar.pack_propagate(False)
-        self._label(sidebar, "СОСТОЯНИЕ", size=8, color=MUTED, weight="bold", bg=CARD).pack(
-            anchor="w", padx=self._px(7), pady=(0, self._px(12)))
+        self._label(sidebar, "Разделы", size=9, color=MUTED, bg=SIDEBAR).pack(
+            anchor="w", padx=self._px(11), pady=(0, self._px(11)))
         self._nav_buttons = {}
         self.mode_status = {}
-        self._nav_button(sidebar, "vpn", "VPN", "Mihomo · защищённый маршрут", "V", GREEN)
-        self._nav_button(sidebar, "google", "Gemini + Antigravity", "DNS и relay · независимо", "G", BLUE)
-        tk.Frame(sidebar, bg=LINE, height=1).pack(fill="x", pady=(self._px(20), self._px(12)))
-        self._nav_button(sidebar, "settings", "Настройки", "Клавиши · автозапуск", "⚙", MUTED)
-        self._label(sidebar, "Режимы управляются отдельно.", size=8, color=MUTED,
-                    bg=CARD, wraplength=self._px(190), justify="left").pack(side="bottom", anchor="w", padx=self._px(7))
+        self._nav_button(sidebar, "vpn", "VPN", "Mihomo")
+        self._nav_button(sidebar, "google", "Gemini и Antigravity", "DNS и relay")
+        tk.Frame(sidebar, bg=LINE, height=1).pack(fill="x", pady=(self._px(13), self._px(10)))
+        self._nav_button(sidebar, "settings", "Настройки", "Клавиши и автозапуск")
+        self._label(sidebar, "Состояние каждого режима\nпоказано отдельно.", size=8, color=MUTED,
+                    bg=SIDEBAR, justify="left").pack(side="bottom", anchor="w", padx=self._px(11))
 
         workspace = tk.Frame(body, bg=BG)
         workspace.pack(side="left", fill="both", expand=True)
@@ -192,43 +195,41 @@ class Dashboard:
         vpn, google, settings = (self.pages[name] for name in ("vpn", "google", "settings"))
         self.cards = {}
 
-        self._page_heading(vpn, "01 / ЗАЩИЩЁННОЕ СОЕДИНЕНИЕ", "VPN", "Mihomo подключает выбранный узел подписки.")
-        self._card(vpn, "vpn", "Туннель VPN", "Маршрут и внешний HTTPS проверяются при подключении.",
-                   self.tray._schedule_toggle_happ, hero=True)
+        self._page_heading(vpn, "VPN", "Подключение через Mihomo")
+        self._card(vpn, "vpn", "Соединение", "Маршрут и доступность проверяются после подключения.",
+                   self.tray._schedule_toggle_happ)
 
         subscription = tk.Frame(vpn, bg=CARD, highlightthickness=1,
                                 highlightbackground=LINE, padx=self._px(18), pady=self._px(15))
         subscription.pack(fill="x")
         heading = tk.Frame(subscription, bg=CARD)
         heading.pack(fill="x", pady=(0, self._px(8)))
-        self._label(heading, "Подписка Mihomo", size=11, weight="bold", bg=CARD).pack(side="left")
-        self._label(heading, "HTTPS  ·  ШИФРОВАНИЕ DPAPI", size=8, color=GREEN, weight="bold", bg=CARD).pack(side="right")
-        self._label(subscription, "Ссылка хранится локально в зашифрованном виде.",
-                    size=9, color=MUTED, bg=CARD).pack(anchor="w", pady=(0, self._px(8)))
+        self._label(heading, "Подписка", size=11, weight="bold", bg=CARD).pack(side="left")
+        self._label(subscription, "Ссылка сохраняется на этом компьютере в зашифрованном виде.",
+                    size=9, color=MUTED, bg=CARD).pack(anchor="w", pady=(0, self._px(11)))
         row = tk.Frame(subscription, bg=CARD)
         row.pack(fill="x")
-        self.subscription = tk.Entry(row, bg=FIELD, fg=TEXT, insertbackground=GREEN,
+        self.subscription = tk.Entry(row, bg=FIELD, fg=TEXT, insertbackground=TEXT,
                                      relief="flat", font=(FONT, 10), show="",
                                      highlightthickness=1, highlightbackground=LINE,
-                                     highlightcolor=GREEN, bd=0)
-        self.subscription.pack(side="left", fill="x", expand=True, ipady=self._px(8))
+                                     highlightcolor=BLUE, bd=0)
+        self.subscription.pack(side="left", fill="x", expand=True, ipady=self._px(7))
         self.subscription_visibility = self._button(row, "Скрыть", self._reveal_subscription, width=9)
         self.subscription_visibility.pack(side="left", padx=(self._px(8), 0))
         self._button(row, "Сохранить", self._import_subscription, filled=True, width=11).pack(side="left", padx=(self._px(8), 0))
-        self._label(subscription, "УЗЕЛ ПОДПИСКИ", size=8, color=MUTED, weight="bold", bg=CARD).pack(
-            anchor="w", pady=(self._px(16), self._px(7)))
+        self._label(subscription, "Узел", size=9, color=MUTED, bg=CARD).pack(
+            anchor="w", pady=(self._px(15), self._px(7)))
         node_row = tk.Frame(subscription, bg=CARD)
         node_row.pack(fill="x")
         self.vpn_node = ttk.Combobox(node_row, state="readonly", style="Suite.TCombobox", width=34)
         self.vpn_node.pack(side="left", fill="x", expand=True)
         self.vpn_node.bind("<<ComboboxSelected>>", lambda _event: self._select_vpn_node())
         self._button(node_row, "Обновить узлы", self._refresh_vpn_nodes, width=14).pack(side="left", padx=(self._px(8), 0))
-        self.best_button = self._button(vpn, "Выбрать лучший зарубежный VPN", self._choose_best_vpn_node,
-                                        filled=True, width=31)
+        self.best_button = self._button(vpn, "Выбрать лучший зарубежный узел", self._choose_best_vpn_node,
+                                        filled=True, width=29)
         self.best_button.pack(side="bottom", anchor="e", pady=(self._px(15), 0))
 
-        self._page_heading(google, "02 / GOOGLE WORKSPACE", "Gemini + Antigravity",
-                           "Два отдельных переключателя для сайта и рабочей сессии.")
+        self._page_heading(google, "Gemini и Antigravity", "Настройки работают независимо друг от друга")
         self._card(google, "gemini", "Gemini Web DNS", "Проверяю текущие настройки…",
                    self._toggle_gemini_dns)
         actions = tk.Frame(google, bg=BG)
@@ -237,9 +238,7 @@ class Dashboard:
         self._button(actions, "Открыть Gemini", self._open_gemini, width=17).pack(side="left", padx=(self._px(8), 0))
         self._card(google, "ag", "Antigravity relay", "Запускается и выключается независимо от VPN и DNS.",
                    self.tray._schedule_toggle_ag)
-        self._info_panel(google, "ДВА РЕЖИМА", "Gemini Web управляет DNS текущей сети. Antigravity запускает локальный relay. Их состояние проверяется отдельно.")
-
-        self._page_heading(settings, "03 / ПЕРСОНАЛИЗАЦИЯ", "Настройки", "Горячие клавиши и запуск вместе с Windows.")
+        self._page_heading(settings, "Настройки", "Горячие клавиши, автозапуск и компоненты")
 
         keys = tk.Frame(settings, bg=CARD, highlightthickness=1,
                         highlightbackground=LINE, padx=self._px(18), pady=self._px(15))
@@ -252,7 +251,7 @@ class Dashboard:
             row = tk.Frame(keys, bg=CARD)
             row.pack(fill="x", pady=(self._px(7), 0))
             self._label(row, title, bg=CARD, width=15, anchor="w").pack(side="left")
-            current = self._label(row, "", color=BLUE, bg=CARD, width=16, anchor="w")
+            current = self._label(row, "", color=TEXT, bg=CARD, width=16, anchor="w")
             current.pack(side="left")
             self.key_labels[component] = current
             presets = {"happ": ("Ctrl+Alt+H", "Ctrl+Shift+H", "F8"),
@@ -274,12 +273,12 @@ class Dashboard:
                     color=MUTED, bg=CARD).pack(anchor="w", pady=(2, self._px(10)))
         bottom = tk.Frame(install, bg=CARD)
         bottom.pack(fill="x")
-        self._button(bottom, "Установить Mihomo", self._install_mihomo, filled=True, width=18).pack(side="left")
+        self._button(bottom, "Установить Mihomo", self._install_mihomo, width=18).pack(side="left")
         self._button(bottom, "Установить AG", lambda: self._install(AG_UNLOCKER), width=16).pack(side="left", padx=(self._px(8), 0))
         self.autostart = tk.BooleanVar(value=autostart_enabled())
         tk.Checkbutton(settings, text="Запускать с Windows после входа в систему",
                        variable=self.autostart, command=self._set_autostart,
-                       bg=BG, fg=MUTED, selectcolor=FIELD, activebackground=BG,
+                       bg=BG, fg=TEXT, selectcolor=CARD, activebackground=BG,
                        activeforeground=TEXT, font=(FONT, 9), bd=0,
                        highlightthickness=0).pack(anchor="w", pady=(self._px(12), 0))
         self._button(settings, "Открыть журнал", self._open_log, width=17).pack(
@@ -288,36 +287,30 @@ class Dashboard:
                     ". Вернуть прежние настройки можно на странице Gemini Web.",
                     size=9, color=MUTED, justify="left", wraplength=self._px(690)).pack(anchor="w", pady=(self._px(12), 0))
         footer = tk.Frame(content, bg=BG)
-        footer.pack(side="bottom", fill="x", pady=(self._px(10), 0))
+        footer.pack(side="bottom", fill="x", pady=(self._px(8), 0))
         tk.Frame(footer, bg=LINE, height=1).pack(fill="x", pady=(0, self._px(8)))
-        self.message = self._label(footer, "Готово к работе", size=9, color=MUTED,
-                                   anchor="w", justify="left", wraplength=self._px(710))
+        self.message = self._label(footer, "Готово", size=9, color=MUTED,
+                                   anchor="w", justify="left", wraplength=self._px(700))
         self.message.pack(side="left", fill="x", expand=True)
-        self._label(footer, "RELAY STUDIO  /  WINDOWS", size=8, color="#637283", weight="bold").pack(side="right")
         self._show_page("vpn")
 
     def _draw_logo(self, canvas):
         s = self._px
-        canvas.create_oval(s(1), s(1), s(47), s(47), fill=GREEN, outline="")
-        canvas.create_text(s(24), s(24), text="GPT", fill=BG, font=(FONT, 12, "bold"))
+        canvas.create_rectangle(s(1), s(1), s(35), s(35), fill="#34414B", outline="")
+        canvas.create_text(s(18), s(18), text="GPT", fill="#FFFFFF", font=(FONT, 9, "bold"))
 
-    def _nav_button(self, parent, page, title, subtitle, symbol, accent):
-        frame = tk.Frame(parent, bg=CARD_RAISED, padx=self._px(10), pady=self._px(10),
-                         cursor="hand2", highlightthickness=1, highlightbackground=LINE)
-        frame.pack(fill="x", pady=(0, self._px(8)))
-        badge = tk.Label(frame, text=symbol, fg=accent, bg=FIELD, width=3,
-                         font=(FONT, 12, "bold"), pady=self._px(6), cursor="hand2")
-        badge.pack(side="left", padx=(0, self._px(9)))
-        labels = tk.Frame(frame, bg=CARD_RAISED, cursor="hand2")
-        labels.pack(side="left", fill="x", expand=True)
-        heading = self._label(labels, title, size=10, weight="bold", bg=CARD_RAISED, cursor="hand2")
+    def _nav_button(self, parent, page, title, subtitle):
+        frame = tk.Frame(parent, bg=SIDEBAR, padx=self._px(11), pady=self._px(9),
+                         cursor="hand2")
+        frame.pack(fill="x", pady=(0, self._px(3)))
+        heading = self._label(frame, title, size=10, weight="bold", bg=SIDEBAR, cursor="hand2")
         heading.pack(anchor="w")
-        detail = self._label(labels, subtitle, size=8, color=MUTED, bg=CARD_RAISED,
-                             cursor="hand2", wraplength=self._px(150), justify="left")
+        detail = self._label(frame, subtitle, size=8, color=MUTED, bg=SIDEBAR,
+                             cursor="hand2", wraplength=self._px(180), justify="left")
         detail.pack(anchor="w", pady=(self._px(2), 0))
-        for widget in (frame, badge, labels, heading, detail):
+        for widget in (frame, heading, detail):
             widget.bind("<Button-1>", lambda _event, name=page: self._show_page(name))
-        self._nav_buttons[page] = frame
+        self._nav_buttons[page] = (frame, heading, detail)
         if page != "settings":
             self.mode_status[page] = detail
 
@@ -325,54 +318,34 @@ class Dashboard:
         for page in self.pages.values():
             page.pack_forget()
         self.pages[name].pack(fill="both", expand=True)
-        for page, button in self._nav_buttons.items():
-            active = page == name
-            button.configure(highlightbackground=GREEN if active else LINE)
+        for page, widgets in self._nav_buttons.items():
+            color = SELECTED if page == name else SIDEBAR
+            for widget in widgets:
+                widget.configure(bg=color)
 
-    def _page_heading(self, parent, eyebrow: str, title: str, description: str):
-        self._label(parent, eyebrow, size=8, color=GREEN, weight="bold").pack(anchor="w")
-        self._label(parent, title, size=23, weight="bold").pack(anchor="w", pady=(self._px(5), 0))
+    def _page_heading(self, parent, title: str, description: str):
+        self._label(parent, title, size=19, weight="bold").pack(anchor="w")
         self._label(parent, description, size=9, color=MUTED, wraplength=self._px(690),
-                    justify="left").pack(anchor="w", pady=(self._px(3), self._px(18)))
+                    justify="left").pack(anchor="w", pady=(self._px(4), self._px(17)))
 
-    def _info_panel(self, parent, title: str, description: str):
-        frame = tk.Frame(parent, bg=CARD, padx=self._px(18), pady=self._px(15),
-                         highlightthickness=1, highlightbackground=LINE)
-        frame.pack(fill="x", pady=(self._px(14), 0))
-        self._label(frame, title, size=8, color=GREEN, weight="bold", bg=CARD).pack(anchor="w")
-        self._label(frame, description, size=9, color=MUTED, bg=CARD,
-                    wraplength=self._px(650), justify="left").pack(anchor="w", pady=(self._px(6), 0))
-
-    def _card(self, parent, key, title, description, action, *, toggle=True,
-              hero=False, compact=False):
-        frame = tk.Frame(parent, bg=CARD_RAISED if hero else CARD,
+    def _card(self, parent, key, title, description, action):
+        frame = tk.Frame(parent, bg=CARD,
                          highlightthickness=1, highlightbackground=LINE,
-                         padx=self._px(18 if hero else 14),
-                         pady=self._px(15 if hero else 11))
-        frame.pack(side="left" if compact else "top", fill="both" if compact else "x",
-                   expand=compact, padx=(0, self._px(8)) if compact and key == "ag" else
-                   (self._px(4), 0) if compact else 0,
-                   pady=0 if compact else (0, self._px(10)))
-        title_row = tk.Frame(frame, bg=CARD_RAISED if hero else CARD)
+                         padx=self._px(18), pady=self._px(15))
+        frame.pack(fill="x", pady=(0, self._px(11)))
+        title_row = tk.Frame(frame, bg=CARD)
         title_row.pack(fill="x")
         dot = tk.Canvas(title_row, width=self._px(12), height=self._px(12),
-                        bg=CARD_RAISED if hero else CARD, highlightthickness=0)
+                        bg=CARD, highlightthickness=0)
         dot.pack(side="left", padx=(0, self._px(8)))
         dot.create_oval(self._px(2), self._px(2), self._px(10), self._px(10), fill=MUTED, outline="")
-        self._label(title_row, title, size=12 if hero else 10, weight="bold",
-                    bg=CARD_RAISED if hero else CARD).pack(side="left")
-        button = self._button(title_row, "Подключить" if toggle else "Проверить", action,
-                              filled=hero, width=13 if hero else 11)
+        self._label(title_row, title, size=11, weight="bold", bg=CARD).pack(side="left")
+        button = self._button(title_row, "Включить", action, width=13)
         button.pack(side="right")
         detail = self._label(frame, description, size=9, color=MUTED,
-                             bg=CARD_RAISED if hero else CARD, justify="left",
+                             bg=CARD, justify="left",
                              wraplength=self._px(650))
         detail.pack(anchor="w", padx=(self._px(20), 0), pady=(self._px(5), 0))
-        if hero:
-            self._label(frame, "MIHOMO  ·  TUN  ·  СКВОЗНОЕ ШИФРОВАНИЕ",
-                        size=8, color="#7E91A4", weight="bold",
-                        bg=CARD_RAISED).pack(anchor="w", padx=(self._px(20), 0),
-                                             pady=(self._px(8), 0))
         self.cards[key] = (dot, detail, button)
 
     def set_message(self, message: str):
@@ -513,7 +486,7 @@ class Dashboard:
             finally:
                 self._best_busy = False
                 self.root.after(0, lambda: self.best_button.configure(
-                    state="normal", text="Выбрать лучший зарубежный VPN"))
+                    state="normal", text="Выбрать лучший зарубежный узел"))
         threading.Thread(target=worker, name="ChooseBestMihomoNode", daemon=True).start()
     def _capture_key(self, component: str):
         self.tray._capture_shortcut(component)
