@@ -32,6 +32,8 @@ def build_release(source: Path = SOURCE, output: Path = OUTPUT) -> Path:
     output = Path(output).resolve()
     inspect_package_tree(source)
     output.mkdir(parents=True, exist_ok=True)
+    for stale in output.glob("RelayStudio-*-win-x64.zip*"):
+        stale.unlink()
 
     version = app_version()
     package_name = f"RelayStudio-{version}-win-x64"

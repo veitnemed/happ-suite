@@ -1,6 +1,6 @@
 [project]
 name = "relay-studio"
-version = "2.3.0"
+version = "2.3.1"
 description = "Windows controls for Mihomo VPN, Gemini Web DNS and Antigravity"
 requires-python = ">=3.10"
 license = "MIT"
