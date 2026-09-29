@@ -17,25 +17,37 @@ import requests
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 try:
+    from .components import (
+        AgUnlockerComponent, ComponentOperationError, ComponentStatus, GoogleAntigravityComponent,
+        MihomoComponent, VSCodeComponent, component_presentation,
+    )
     from .core import ComponentState
+    from .gemini_availability import GeminiAvailabilityClient, GeminiNetworkStatus, RegionSupport
+    from .ui_model import DASHBOARD_PAGES, gemini_access_summary, vpn_presentation
     from .hotkey import HotkeyChoice, MOD_ALT, MOD_CONTROL, MOD_SHIFT, VK_F8, VK_F9
-    from .official_installers import AG_UNLOCKER, download, run_installer
-    from .mihomo_installer import install_mihomo
     from .node_region import country_hint
     from .windows_elevation import is_admin
     from .autostart import is_enabled as autostart_enabled, set_enabled as set_autostart
     from .gemini_dns import DnsManager, apply_action, XBOX_DNS
-    from .vpn_backend import NetworkUnavailableError, ProviderFormatError, SubscriptionError
+    from .vpn_backend import (
+        NetworkUnavailableError, ProviderFormatError, SubscriptionError,
+    )
 except ImportError:
+    from components import (
+        AgUnlockerComponent, ComponentOperationError, ComponentStatus, GoogleAntigravityComponent,
+        MihomoComponent, VSCodeComponent, component_presentation,
+    )
     from core import ComponentState
+    from gemini_availability import GeminiAvailabilityClient, GeminiNetworkStatus, RegionSupport
+    from ui_model import DASHBOARD_PAGES, gemini_access_summary, vpn_presentation
     from hotkey import HotkeyChoice, MOD_ALT, MOD_CONTROL, MOD_SHIFT, VK_F8, VK_F9
-    from official_installers import AG_UNLOCKER, download, run_installer
-    from mihomo_installer import install_mihomo
     from node_region import country_hint
     from windows_elevation import is_admin
     from autostart import is_enabled as autostart_enabled, set_enabled as set_autostart
     from gemini_dns import DnsManager, apply_action, XBOX_DNS
-    from vpn_backend import NetworkUnavailableError, ProviderFormatError, SubscriptionError
+    from vpn_backend import (
+        NetworkUnavailableError, ProviderFormatError, SubscriptionError,
+    )
 
 
 BG = "#F7F8F9"
@@ -70,7 +82,12 @@ class Dashboard:
         self.tray = tray
         self.config = config
         self.variant = package_variant()
+        self.mihomo_component = MihomoComponent()
+        self.ag_unlocker_component = AgUnlockerComponent()
+        self.vscode_component = VSCodeComponent()
+        self.google_antigravity_component = GoogleAntigravityComponent()
         self.gemini_site_status = "Сайт ещё не проверен"
+        self.gemini_availability = None
         self._gemini_probe_running = False
         self._dns_busy = False
         self._dns_refreshing = False
@@ -83,7 +100,13 @@ class Dashboard:
         except tk.TclError:
             self.ui_scale = 1.0
         self._nav_buttons = {}
+        self._component_installing = set()
+        self._component_install_pending = set()
+        self._component_install_deadlines = {}
         self._build()
+        self.gemini_availability_client = GeminiAvailabilityClient(
+            dns_status=lambda: self._dns_status if self._dns_status is not None else DnsManager().status(),
+        )
         if self.config.vpn_backend == "mihomo":
             try:
                 saved_url = self.tray.orchestrator.vpn.saved_subscription_url()
@@ -117,6 +140,50 @@ class Dashboard:
                          highlightbackground=BLUE if filled else LINE,
                          highlightcolor=BLUE, takefocus=True)
 
+    def _component_tile(self, parent, title, action, command, row, column):
+        tile = tk.Frame(parent, bg="#FBFCFD", highlightthickness=1,
+                        highlightbackground=LINE, padx=self._px(12), pady=self._px(10))
+        tile.grid(row=row, column=column, sticky="nsew",
+                  padx=(0, self._px(6)) if column == 0 else (self._px(6), 0),
+                  pady=(0, self._px(8)))
+        heading = tk.Frame(tile, bg="#FBFCFD")
+        heading.pack(fill="x")
+        self._label(heading, title, size=10, weight="bold", bg="#FBFCFD").pack(side="left", anchor="w")
+        button = self._button(heading, action, command, width=13)
+        button.pack(side="right")
+        status = self._label(tile, "Проверка…", size=9, color=MUTED, bg="#FBFCFD", anchor="w")
+        status.pack(fill="x", pady=(self._px(7), 0))
+        return status, button
+
+    def _render_component(self, installation, status_label, button, *, install_label, open_label):
+        presentation = component_presentation(
+            installation, install_label=install_label, open_label=open_label,
+        )
+        if (installation.id in self._component_installing
+                or installation.id in self._component_install_pending):
+            status_label.configure(text="Установка…", fg=YELLOW)
+            button.configure(text="Подождите…", state="disabled")
+            return presentation
+        color = {"success": GREEN, "error": RED, "warning": YELLOW,
+                 "busy": YELLOW, "muted": MUTED}.get(presentation.tone, MUTED)
+        status_label.configure(text=presentation.status_text, fg=color)
+        button.configure(text=presentation.action_text,
+                          state="normal" if presentation.action_enabled else "disabled")
+        return presentation
+
+    def _begin_component_install(self, component_id, button, status_label) -> bool:
+        if (component_id in self._component_installing
+                or component_id in self._component_install_pending):
+            return False
+        self._component_installing.add(component_id)
+        status_label.configure(text="Установка…", fg=YELLOW)
+        button.configure(text="Подождите…", state="disabled")
+        return True
+
+    def _finish_component_install(self, component_id, refresh):
+        self._component_installing.discard(component_id)
+        self.root.after(0, refresh)
+
     def _build(self):
         root = self.root
         root.title("Relay Studio")
@@ -132,10 +199,10 @@ class Dashboard:
         self._window_icon = ImageTk.PhotoImage(icon, master=root)
         root.iconphoto(True, self._window_icon)
         screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
-        width = min(self._px(960), screen_w - self._px(48))
-        height = min(self._px(680), screen_h - self._px(64))
+        width = min(self._px(1180), screen_w - self._px(48))
+        height = min(self._px(740), screen_h - self._px(64))
         root.geometry(f"{width}x{height}")
-        root.minsize(min(self._px(820), width), min(self._px(590), height))
+        root.minsize(min(self._px(860), width), min(self._px(620), height))
         root.protocol("WM_DELETE_WINDOW", root.withdraw)
         style = ttk.Style(root)
         # Clam permits consistent field and list colors on Windows.
@@ -174,30 +241,35 @@ class Dashboard:
 
         body = tk.Frame(content, bg=BG)
         body.pack(fill="both", expand=True, pady=(self._px(17), 0))
-        sidebar = tk.Frame(body, bg=SIDEBAR, width=self._px(220), padx=self._px(10), pady=self._px(15),
+        sidebar = tk.Frame(body, bg=SIDEBAR, width=self._px(166), padx=self._px(8), pady=self._px(15),
                            highlightthickness=1, highlightbackground=LINE)
-        sidebar.pack(side="left", fill="y", padx=(0, self._px(18)))
+        sidebar.pack(side="left", fill="y", padx=(0, self._px(14)))
         sidebar.pack_propagate(False)
         self._label(sidebar, "Разделы", size=9, color=MUTED, bg=SIDEBAR).pack(
             anchor="w", padx=self._px(11), pady=(0, self._px(11)))
         self._nav_buttons = {}
         self.mode_status = {}
         self._nav_button(sidebar, "vpn", "VPN", "Mihomo")
-        self._nav_button(sidebar, "google", "Gemini и Antigravity", "DNS и relay")
+        self._nav_button(sidebar, "google", "Gemini", "Сеть и DNS")
+        self._nav_button(sidebar, "ag", "Antigravity", "AG Unlocker / Relay")
         tk.Frame(sidebar, bg=LINE, height=1).pack(fill="x", pady=(self._px(13), self._px(10)))
         self._nav_button(sidebar, "settings", "Настройки", "Клавиши и автозапуск")
         self._label(sidebar, "Состояние каждого режима\nпоказано отдельно.", size=8, color=MUTED,
                     bg=SIDEBAR, justify="left").pack(side="bottom", anchor="w", padx=self._px(11))
 
         workspace = tk.Frame(body, bg=BG)
+        status_panel = tk.Frame(body, bg=SIDEBAR, width=self._px(238), padx=self._px(13), pady=self._px(15),
+                                highlightthickness=1, highlightbackground=LINE)
+        status_panel.pack(side="right", fill="y", padx=(self._px(14), 0))
+        status_panel.pack_propagate(False)
         workspace.pack(side="left", fill="both", expand=True)
-        self.pages = {name: tk.Frame(workspace, bg=BG) for name in ("vpn", "google", "settings")}
-        vpn, google, settings = (self.pages[name] for name in ("vpn", "google", "settings"))
+        self.pages = {name: tk.Frame(workspace, bg=BG) for name in DASHBOARD_PAGES}
+        vpn, google, ag_page, settings = (
+            self.pages[name] for name in ("vpn", "google", "ag", "settings")
+        )
         self.cards = {}
 
-        self._page_heading(vpn, "VPN", "Подключение через Mihomo")
-        self._card(vpn, "vpn", "Соединение", "Маршрут и доступность проверяются после подключения.",
-                   self.tray._schedule_toggle_happ)
+        self._page_heading(vpn, "VPN", "Безопасное подключение через Mihomo")
 
         subscription = tk.Frame(vpn, bg=CARD, highlightthickness=1,
                                 highlightbackground=LINE, padx=self._px(18), pady=self._px(15))
@@ -229,16 +301,40 @@ class Dashboard:
                                         filled=True, width=29)
         self.best_button.pack(side="bottom", anchor="e", pady=(self._px(15), 0))
 
-        self._page_heading(google, "Gemini и Antigravity", "Настройки работают независимо друг от друга")
-        self._card(google, "gemini", "Gemini Web DNS", "Проверяю текущие настройки…",
+        self._page_heading(google, "Gemini Web", "Доступность сети, сайта и региона — отдельно от Google Account")
+        self._card(google, "gemini", "Gemini Web", "Проверяю текущие соединения…",
                    self._toggle_gemini_dns)
         actions = tk.Frame(google, bg=BG)
         actions.pack(fill="x", pady=(self._px(10), self._px(17)))
         self._button(actions, "Проверить сайт", self._check_gemini_now, width=16).pack(side="left")
         self._button(actions, "Открыть Gemini", self._open_gemini, width=17).pack(side="left", padx=(self._px(8), 0))
-        self._card(google, "ag", "Antigravity relay", "Запускается и выключается независимо от VPN и DNS.",
+        self._page_heading(ag_page, "Antigravity", "AG Unlocker / Relay управляется отдельно от Gemini Web")
+        self._card(ag_page, "ag", "AG Unlocker / Relay", "Работает независимо от VPN и DNS.",
                    self.tray._schedule_toggle_ag)
         self._page_heading(settings, "Настройки", "Горячие клавиши, автозапуск и компоненты")
+
+        self._label(status_panel, "СОСТОЯНИЕ", size=8, color=MUTED, weight="bold", bg=SIDEBAR).pack(anchor="w")
+        self._card(status_panel, "vpn", "VPN", "Подключение через Mihomo.",
+                   self.tray._schedule_toggle_happ)
+        self._label(status_panel, "ТЕКУЩИЙ УЗЕЛ", size=8, color=MUTED, weight="bold", bg=SIDEBAR).pack(
+            anchor="w", pady=(self._px(14), self._px(4)))
+        self.vpn_status_node = self._label(status_panel, "Не выбран", size=10, weight="bold",
+                                           bg=SIDEBAR, wraplength=self._px(205), justify="left")
+        self.vpn_status_node.pack(anchor="w")
+        self.vpn_status_ping = self._label(status_panel, "Задержка · не измерена", size=9,
+                                           color=MUTED, bg=SIDEBAR)
+        self.vpn_status_ping.pack(anchor="w", pady=(self._px(8), 0))
+        self.vpn_status_country = self._label(status_panel, "Страна выхода · не проверена", size=9,
+                                              color=MUTED, bg=SIDEBAR)
+        self.vpn_status_country.pack(anchor="w", pady=(self._px(5), 0))
+        self.vpn_status_ip = self._label(status_panel, "Внешний IP · не проверен", size=9,
+                                         color=MUTED, bg=SIDEBAR)
+        self.vpn_status_ip.pack(anchor="w", pady=(self._px(5), 0))
+        tk.Frame(status_panel, bg=LINE, height=1).pack(fill="x", pady=(self._px(15), self._px(12)))
+        self._label(status_panel, "Relay", size=9, weight="bold", bg=SIDEBAR).pack(anchor="w")
+        self._label(status_panel, "Состояние и управление на странице Antigravity.",
+                    size=8, color=MUTED, bg=SIDEBAR, wraplength=self._px(205),
+                    justify="left").pack(anchor="w", pady=(self._px(4), 0))
 
         keys = tk.Frame(settings, bg=CARD, highlightthickness=1,
                         highlightbackground=LINE, padx=self._px(18), pady=self._px(15))
@@ -269,12 +365,24 @@ class Dashboard:
                            highlightbackground=LINE, padx=self._px(18), pady=self._px(14))
         install.pack(fill="x")
         self._label(install, "Компоненты", size=11, weight="bold", bg=CARD).pack(anchor="w")
-        self._label(install, "Установщики проверяются по контрольной сумме.", size=9,
+        self._label(install, "Установка и состояние каждого приложения проверяются отдельно.", size=9,
                     color=MUTED, bg=CARD).pack(anchor="w", pady=(2, self._px(10)))
-        bottom = tk.Frame(install, bg=CARD)
-        bottom.pack(fill="x")
-        self._button(bottom, "Установить Mihomo", self._install_mihomo, width=18).pack(side="left")
-        self._button(bottom, "Установить AG", lambda: self._install(AG_UNLOCKER), width=16).pack(side="left", padx=(self._px(8), 0))
+        component_grid = tk.Frame(install, bg=CARD)
+        component_grid.pack(fill="x")
+        component_grid.grid_columnconfigure(0, weight=1, uniform="component")
+        component_grid.grid_columnconfigure(1, weight=1, uniform="component")
+        self.mihomo_installation_label, self.mihomo_install_button = self._component_tile(
+            component_grid, "Mihomo", "Установить", self._install_mihomo, 0, 0,
+        )
+        self.vscode_status_label, self.vscode_install_button = self._component_tile(
+            component_grid, "Visual Studio Code", "Установить", self._install_or_open_vscode, 0, 1,
+        )
+        self.google_antigravity_status_label, self.google_antigravity_install_button = self._component_tile(
+            component_grid, "Google Antigravity", "Установить", self._install_or_open_google_antigravity, 1, 0,
+        )
+        self.ag_unlocker_status_label, self.ag_unlocker_install_button = self._component_tile(
+            component_grid, "AG Unlocker / Relay", "Установить", self._install_ag_unlocker, 1, 1,
+        )
         self.autostart = tk.BooleanVar(value=autostart_enabled())
         tk.Checkbutton(settings, text="Запускать с Windows после входа в систему",
                        variable=self.autostart, command=self._set_autostart,
@@ -293,6 +401,97 @@ class Dashboard:
                                    anchor="w", justify="left", wraplength=self._px(700))
         self.message.pack(side="left", fill="x", expand=True)
         self._show_page("vpn")
+        self._refresh_mihomo_installation()
+        self._refresh_ag_unlocker_installation()
+        self._refresh_vscode_installation()
+        self._refresh_google_antigravity_installation()
+
+    def _refresh_mihomo_installation(self):
+        installation = self.mihomo_component.detect()
+        self._render_component(
+            installation, self.mihomo_installation_label, self.mihomo_install_button,
+            install_label="Установить Mihomo", open_label="Проверить Mihomo",
+        )
+        return installation
+
+    def _refresh_ag_unlocker_installation(self):
+        installation = self.ag_unlocker_component.detect()
+        self._render_component(
+            installation, self.ag_unlocker_status_label, self.ag_unlocker_install_button,
+            install_label="Установить AG Unlocker", open_label="Переключить Relay",
+        )
+        return installation
+
+    def _refresh_vscode_installation(self):
+        installation = self.vscode_component.detect()
+        self._render_component(
+            installation, self.vscode_status_label, self.vscode_install_button,
+            install_label="Установить VS Code", open_label="Открыть VS Code",
+        )
+        return installation
+
+    def _refresh_google_antigravity_installation(self):
+        installation = self.google_antigravity_component.detect()
+        self._render_component(
+            installation, self.google_antigravity_status_label, self.google_antigravity_install_button,
+            install_label="Установить Antigravity", open_label="Открыть Antigravity",
+        )
+        return installation
+
+    def _install_or_open_google_antigravity(self):
+        if self.google_antigravity_component.detect().installed:
+            try:
+                if self.google_antigravity_component.open():
+                    self.set_message("Google Antigravity открыт.")
+                else:
+                    self.set_message("Не удалось найти установленный Google Antigravity.")
+            except OSError as exc:
+                self.set_message(f"Не удалось открыть Google Antigravity: {type(exc).__name__}")
+            return
+        if not self._begin_component_install(
+            "google_antigravity", self.google_antigravity_install_button,
+            self.google_antigravity_status_label,
+        ):
+            return
+
+        def worker():
+            try:
+                installation = self.google_antigravity_component.install()
+                self.root.after(0, self._refresh_google_antigravity_installation)
+                self.set_message(f"Google Antigravity {installation.version} установлен и обнаружен.")
+            except ComponentOperationError as exc:
+                self.set_message(str(exc))
+            finally:
+                self._finish_component_install(
+                    "google_antigravity", self._refresh_google_antigravity_installation,
+                )
+
+        threading.Thread(target=worker, name="InstallGoogleAntigravity", daemon=True).start()
+
+    def _install_or_open_vscode(self):
+        if self.vscode_component.detect().installed:
+            try:
+                if self.vscode_component.open():
+                    self.set_message("Visual Studio Code открыт.")
+                else:
+                    self.set_message("Не удалось найти установленный Visual Studio Code.")
+            except OSError as exc:
+                self.set_message(f"Не удалось открыть Visual Studio Code: {type(exc).__name__}")
+            return
+        if not self._begin_component_install("vscode", self.vscode_install_button, self.vscode_status_label):
+            return
+
+        def worker():
+            try:
+                installation = self.vscode_component.install()
+                self.root.after(0, self._refresh_vscode_installation)
+                self.set_message(f"Visual Studio Code {installation.version} установлен и проверен.")
+            except ComponentOperationError as exc:
+                self.set_message(str(exc))
+            finally:
+                self._finish_component_install("vscode", self._refresh_vscode_installation)
+
+        threading.Thread(target=worker, name="InstallVSCode", daemon=True).start()
 
     def _draw_logo(self, canvas):
         s = self._px
@@ -402,13 +601,23 @@ class Dashboard:
             self.set_message(f"Не удалось открыть журнал: {log_path}")
 
     def _install_mihomo(self):
+        if not self._begin_component_install(
+            "mihomo", self.mihomo_install_button, self.mihomo_installation_label,
+        ):
+            return
+
         def worker():
             try:
-                self.set_message("Загружаю Mihomo и проверяю SHA-256…")
-                path, _ = install_mihomo()
-                self.set_message(f"Mihomo установлен: {path.name}")
+                installation = self.mihomo_component.install()
+                message = f"Mihomo {installation.version} установлен и проверен."
+                self.root.after(0, self._refresh_mihomo_installation)
+                self.set_message(message)
+            except ComponentOperationError as exc:
+                self.set_message(str(exc))
             except Exception as exc:
                 self.set_message(f"Не удалось установить Mihomo: {type(exc).__name__}")
+            finally:
+                self._finish_component_install("mihomo", self._refresh_mihomo_installation)
         threading.Thread(target=worker, name="InstallMihomo", daemon=True).start()
 
     def _choose_preset(self, component: str, label: str):
@@ -492,18 +701,64 @@ class Dashboard:
         self.tray._capture_shortcut(component)
         self.set_message("Нажмите клавишу в течение 10 секунд; Esc — отмена")
 
-    def _install(self, installer):
+    def _install_ag_unlocker(self):
+        if self.ag_unlocker_component.detect().installed:
+            self.tray._schedule_toggle_ag()
+            return
+        if not self._begin_component_install(
+            "ag_unlocker", self.ag_unlocker_install_button, self.ag_unlocker_status_label,
+        ):
+            return
+
         def worker():
             try:
-                self.set_message(f"Загрузка {installer.name}…")
-                path = download(installer)
-                self.set_message(f"Запускаю официальный {installer.name}…")
-                run_installer(path)
-                self.set_message("Завершите настройку в окне установщика")
-            except Exception:
-                self.set_message(f"Не удалось загрузить {installer.name}")
+                installation = self.ag_unlocker_component.install()
+                if installation.status is ComponentStatus.INSTALLING:
+                    self.root.after(0, self._track_ag_unlocker_installer)
+                    self.set_message(f"Открыт официальный установщик {installation.display_name}.")
+            except ComponentOperationError as exc:
+                self.set_message(str(exc))
+            finally:
+                self._finish_component_install("ag_unlocker", self._refresh_ag_unlocker_installation)
 
-        threading.Thread(target=worker, name="InstallOfficialComponents", daemon=True).start()
+        threading.Thread(target=worker, name="InstallAGUnlocker", daemon=True).start()
+
+    def _track_ag_unlocker_installer(self):
+        self._component_install_pending.add("ag_unlocker")
+        self._component_install_deadlines["ag_unlocker"] = time.monotonic() + 300
+        self.ag_unlocker_status_label.configure(text="Официальный установщик открыт · завершите настройку", fg=YELLOW)
+        self.ag_unlocker_install_button.configure(text="Проверка установки…", state="disabled")
+        self.root.after(2500, self._poll_ag_unlocker_installation)
+
+    def _poll_ag_unlocker_installation(self):
+        if "ag_unlocker" not in self._component_install_pending:
+            return
+
+        def worker():
+            try:
+                installation = self.ag_unlocker_component.detect()
+            except Exception:
+                installation = None
+            self.root.after(0, lambda: self._finish_ag_unlocker_detection(installation))
+
+        threading.Thread(target=worker, name="DetectAGUnlocker", daemon=True).start()
+
+    def _finish_ag_unlocker_detection(self, installation):
+        if "ag_unlocker" not in self._component_install_pending:
+            return
+        if installation is not None and installation.installed:
+            self._component_install_pending.discard("ag_unlocker")
+            self._component_install_deadlines.pop("ag_unlocker", None)
+            self._refresh_ag_unlocker_installation()
+            self.set_message("AG Unlocker / Relay установлен и обнаружен.")
+            return
+        if time.monotonic() >= self._component_install_deadlines.get("ag_unlocker", 0):
+            self._component_install_pending.discard("ag_unlocker")
+            self._component_install_deadlines.pop("ag_unlocker", None)
+            self._refresh_ag_unlocker_installation()
+            self.set_message("AG Unlocker пока не обнаружен. Закройте установщик и повторите проверку.")
+            return
+        self.root.after(2500, self._poll_ag_unlocker_installation)
 
     def _set_autostart(self):
         try:
@@ -517,23 +772,41 @@ class Dashboard:
         if self._gemini_probe_running:
             return
         self._gemini_probe_running = True
-        self.gemini_site_status = "Проверяю HTTPS…"
+        self.gemini_site_status = "Проверяю сеть, Gemini Web, DNS и регион…"
+        self.root.after(0, self._refresh)
 
         def worker():
             try:
-                with requests.Session() as session:
-                    session.trust_env = False
-                    response = session.get("https://gemini.google.com", timeout=6)
-                    self.gemini_site_status = (
-                        "Сайт отвечает; модель проверяется в браузере" if 200 <= response.status_code < 400
-                        else f"Сайт вернул HTTP {response.status_code}"
-                    )
-            except requests.RequestException:
-                self.gemini_site_status = "Сайт недоступен по текущему маршруту"
+                self.gemini_availability = self.gemini_availability_client.check()
+                self.gemini_site_status = self._format_gemini_availability(self.gemini_availability)
+            except Exception as exc:
+                self.gemini_site_status = f"Диагностика Gemini не завершена: {type(exc).__name__}"
             finally:
                 self._gemini_probe_running = False
+                self.root.after(0, self._refresh)
 
         threading.Thread(target=worker, name="GeminiWebProbe", daemon=True).start()
+
+    @staticmethod
+    def _format_gemini_availability(status: GeminiNetworkStatus) -> str:
+        yes_no_unknown = lambda value: "✓" if value is True else "×" if value is False else "?"
+        website_text, account_text = gemini_access_summary(status)
+        country = status.exit_country or "не определена"
+        region = {
+            RegionSupport.SUPPORTED: "поддерживается",
+            RegionSupport.UNSUPPORTED: "не поддерживается",
+            RegionSupport.UNKNOWN: "неизвестно",
+        }[status.region_supported]
+        website = yes_no_unknown(status.website_reachable)
+        if status.website_http_status is not None:
+            website += f" (HTTP {status.website_http_status})"
+        return "\n".join((
+            f"Сеть: {yes_no_unknown(status.network_available)} · "
+            f"сайт: {website} · {website_text} · "
+            f"DNS Suite: {yes_no_unknown(status.dns_managed)}",
+            f"Страна выхода: {country} · регион Gemini: {region}",
+            account_text,
+        ))
 
     def _open_gemini(self):
         webbrowser.open("https://gemini.google.com/app")
@@ -593,6 +866,18 @@ class Dashboard:
             ("ag", self.tray.orchestrator.ag_unlocker.state, "Relay выключен", "Relay работает"),
         ):
             dot, detail, button = self.cards[key]
+            if key == "vpn":
+                vpn_error = getattr(self.tray.orchestrator.vpn, "last_error", None)
+                presentation = vpn_presentation(state, vpn_error)
+                tone = {"success": GREEN, "warning": YELLOW, "busy": YELLOW,
+                        "error": RED, "muted": MUTED}.get(presentation.tone, MUTED)
+                dot.itemconfigure(1, fill=tone)
+                detail.configure(text=presentation.label)
+                button.configure(
+                    text=presentation.action,
+                    state="disabled" if presentation.tone == "busy" else "normal",
+                )
+                continue
             dot.itemconfigure(1, fill=palette.get(state, MUTED))
             detail.configure(text=on_detail if state == ComponentState.RUNNING else
                              off_detail if state == ComponentState.STOPPED else
@@ -633,6 +918,31 @@ class Dashboard:
             text=f"{dns_text} · {ag_text}",
             fg=RED if self._dns_error or ag_state == ComponentState.ERROR else
                GREEN if status and status["managed"] and ag_state == ComponentState.RUNNING else MUTED)
+        self.mode_status["ag"].configure(
+            text="Relay работает" if ag_state == ComponentState.RUNNING else
+                 "Relay выключен" if ag_state == ComponentState.STOPPED else "Relay: проверка",
+            fg=palette.get(ag_state, MUTED),
+        )
+        selected_node = self.vpn_node.get().strip() if hasattr(self, "vpn_node") else ""
+        self.vpn_status_node.configure(text=selected_node or "Узел не выбран")
+        self.vpn_status_ping.configure(
+            text="Задержка · не измерена" if vpn_state != ComponentState.RUNNING
+                 else "Задержка · доступна при проверке узлов",
+        )
+        if vpn_state == ComponentState.RUNNING:
+            diagnostics = self.gemini_availability
+            exit_country = diagnostics.exit_country if diagnostics else None
+            exit_country = exit_country or getattr(self.tray.orchestrator.vpn, "last_exit_country", None)
+            self.vpn_status_country.configure(
+                text=f"Страна выхода · {exit_country}" if exit_country else "Страна выхода · не проверена",
+            )
+            external_ip = diagnostics.external_ip if diagnostics else None
+            self.vpn_status_ip.configure(
+                text=f"Внешний IP · {external_ip}" if external_ip else "Внешний IP · не проверен",
+            )
+        else:
+            self.vpn_status_country.configure(text="Страна выхода · —")
+            self.vpn_status_ip.configure(text="Внешний IP · —")
         for key, widget in self.key_labels.items():
             widget.configure(text=self.tray._hotkey_choices[key].label)
         self.root.after(1000, self._refresh)

@@ -68,7 +68,7 @@ def load_or_create_hwid(directory: Path) -> str:
 class SubscriptionClient:
     """Fetch a subscription with Mihomo identity and return validated YAML."""
 
-    USER_AGENT = "mihomo/HappSuite-2.2.0"
+    USER_AGENT = "mihomo/HappSuite-2.3.0"
     ACCEPT = "application/yaml, text/yaml, */*"
     MAX_BYTES = 8 * 1024 * 1024
     MAX_REDIRECTS = 5

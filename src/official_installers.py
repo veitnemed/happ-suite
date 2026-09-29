@@ -45,7 +45,7 @@ def download(installer: Installer, progress=None, destination: Path | None = Non
     if target.is_file() and _sha256(target) == installer.sha256:
         return target
     temporary = target.with_suffix(target.suffix + ".part")
-    request = urllib.request.Request(installer.url, headers={"User-Agent": "RelayStudio/2.2"})
+    request = urllib.request.Request(installer.url, headers={"User-Agent": "RelayStudio/2.3.0"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response, temporary.open("wb") as output:
             total = int(response.headers.get("Content-Length", "0"))

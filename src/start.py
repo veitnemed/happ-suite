@@ -4,6 +4,8 @@ import argparse
 import ctypes
 import logging
 import os
+from pathlib import Path
+import sys
 import threading
 import tkinter as tk
 
@@ -71,16 +73,38 @@ def _show_existing():
         kernel.CloseHandle(ctypes.c_void_p(handle))
 
 
-def main():
+def main(argv=None):
     enable_high_dpi_awareness()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--background", action="store_true", help="start in the tray after Windows sign-in")
+    parser.add_argument("--self-check", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--bootstrap-mihomo", action="store_true",
+                        help="install or verify Mihomo without starting VPN/TUN")
     parser.add_argument("--elevated-vpn", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--elevated-vpn-stop", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--best-foreign", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--gemini-dns-helper", choices=("enable", "disable"), help=argparse.SUPPRESS)
     parser.add_argument("--dns-result", help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.self_check:
+        if not getattr(sys, "frozen", False):
+            parser.error("--self-check is available only in the packaged application")
+        try:
+            try:
+                from .package_inspection import inspect_package_tree
+            except ImportError:
+                from package_inspection import inspect_package_tree
+            inspect_package_tree(Path(sys.executable).resolve().parent)
+        except (OSError, ValueError) as exc:
+            logging.getLogger("happ_suite.start").error("Packaged application self-check failed: %s", exc)
+            raise SystemExit(1) from exc
+        return
+    if args.bootstrap_mihomo:
+        try:
+            from .components.mihomo import bootstrap_mihomo
+        except ImportError:
+            from components.mihomo import bootstrap_mihomo
+        raise SystemExit(bootstrap_mihomo())
     if args.gemini_dns_helper:
         if not args.dns_result:
             parser.error("--dns-result is required for the DNS helper")

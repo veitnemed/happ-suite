@@ -36,8 +36,10 @@ def build(dist_dir=None, work_dir=None, entry="tray"):
     root_dir = Path(__file__).resolve().parent.parent
     if entry not in {"tray", "start"}:
         raise ValueError("entry must be tray or start")
-    app_name = "RelayStudio" if entry == "tray" else "start"
-    main_py = root_dir / "src" / "main.py" if entry == "tray" else root_dir / "start_app.py"
+    # "tray" remains accepted as a compatibility alias. The release executable
+    # must go through start_app.py so imports retain the src.start package name.
+    app_name = "RelayStudio"
+    main_py = root_dir / "start_app.py"
     default_config = root_dir / "config" / "default.json"
     manifest = root_dir / "assets" / "relay-studio.manifest"
     app_icon = root_dir / "assets" / "relay-studio.ico"
@@ -57,7 +59,8 @@ def build(dist_dir=None, work_dir=None, entry="tray"):
         "--noconfirm",
         f"--manifest={manifest}",
         f"--icon={app_icon}",
-        f"--paths={root_dir / 'src' if entry == 'tray' else root_dir}",
+        f"--paths={root_dir}",
+        f"--add-data={root_dir / 'src' / 'data'};data",
         f"--distpath={dist_dir}",
         f"--workpath={work_dir}",
         f"--specpath={work_dir}",
@@ -95,7 +98,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dist-dir", type=Path, help="PyInstaller output directory")
     parser.add_argument("--work-dir", type=Path, help="isolated PyInstaller work directory")
-    parser.add_argument("--entry", choices=("tray", "start"), default="tray",
-                        help="tray legacy executable or windowed start.exe")
+    parser.add_argument("--entry", choices=("tray", "start"), default="start",
+                        help="windowed RelayStudio executable (tray is a legacy alias)")
     args = parser.parse_args()
     build(args.dist_dir, args.work_dir, args.entry)

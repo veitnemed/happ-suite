@@ -53,6 +53,9 @@ def _stop_old_suite() -> None:
 
 
 def main() -> None:
+    if "--bootstrap-mihomo" in sys.argv[1:]:
+        from src.components.mihomo import bootstrap_mihomo
+        raise SystemExit(bootstrap_mihomo())
     if sys.platform != "win32":
         raise SystemExit("Relay Studio needs Windows")
     _stop_old_suite()

@@ -1,8 +1,11 @@
-name: Windows validation
+name: Windows validation and Setup build
 
 on:
   push:
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   unit-and-package:
@@ -17,14 +20,19 @@ jobs:
         run: python -m pip install -e ".[test]" pyinstaller
       - name: Run unit tests (no live TUN)
         run: python -m pytest -q
-      - name: Build Windows dashboard package
-        run: python scripts/build.py --entry start --dist-dir ${{ runner.temp }}/dist --work-dir ${{ runner.temp }}/build
-      - name: Smoke test frozen package imports
+      - name: Build Relay Studio application directory
+        run: python scripts/build.py --entry start --dist-dir "${{ runner.temp }}/dist" --work-dir "${{ runner.temp }}/build"
+      - name: Smoke test packaged CLI
         shell: pwsh
-        run: '& "${{ runner.temp }}/dist/start/start.exe" --help'
-      - name: Validate packaged default configuration
+        run: '& "${{ runner.temp }}/dist/RelayStudio/RelayStudio.exe" --self-check'
+      - name: Install Inno Setup compiler
         shell: pwsh
-        run: |
-          $config = Get-Content "${{ runner.temp }}/dist/start/config/default.json" -Raw | ConvertFrom-Json
-          if ($config.vpn_backend -ne "mihomo") { throw "Mihomo must be the packaged default backend" }
-          if (-not (Test-Path "${{ runner.temp }}/dist/start/start.exe")) { throw "Packaged dashboard executable is missing" }
+        run: choco install innosetup --yes --no-progress
+      - name: Build and inspect Windows Setup
+        run: python scripts/build_setup.py --source "${{ runner.temp }}/dist/RelayStudio" --output "${{ runner.temp }}/release"
+      - name: Upload Windows Setup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RelayStudio-Setup
+          path: ${{ runner.temp }}/release/RelayStudio-Setup-*-win-x64.exe
+          if-no-files-found: error

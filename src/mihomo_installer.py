@@ -54,7 +54,7 @@ def install_mihomo(paths: RuntimePaths | None = None, *, installer: Installer = 
                 elif name.name.casefold() in {"license", "license.txt"}:
                     license_member = info
             if executable_member is None:
-                raise BinaryIntegrityError("Mihomo archive has no mihomo.exe")
+                raise BinaryIntegrityError("Mihomo archive has no supported Windows executable")
 
             temporary = paths.binary.with_suffix(".exe.part")
             try:

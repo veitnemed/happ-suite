@@ -96,7 +96,7 @@ class TrayToggleTests(unittest.TestCase):
         with patch("src.tray.is_admin", return_value=False), \
              patch("src.tray.relaunch_vpn_elevated", return_value=(True, 42)) as relaunch:
             app._schedule_toggle_happ()
-        relaunch.assert_called_once_with(connect=True)
+        relaunch.assert_called_once_with(connect=True, best_foreign=False)
         app._action_exit.assert_called_once_with()
 
     def test_mihomo_owned_disconnect_requests_elevation_for_stop_action(self):
@@ -110,7 +110,7 @@ class TrayToggleTests(unittest.TestCase):
         with patch("src.tray.is_admin", return_value=False), \
              patch("src.tray.relaunch_vpn_elevated", return_value=(True, 42)) as relaunch:
             app._schedule_toggle_happ()
-        relaunch.assert_called_once_with(connect=False)
+        relaunch.assert_called_once_with(connect=False, best_foreign=False)
         app._action_exit.assert_called_once_with()
 
 

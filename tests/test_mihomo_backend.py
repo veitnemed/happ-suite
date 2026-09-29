@@ -162,6 +162,43 @@ class MihomoOwnershipTests(unittest.TestCase):
         self.assertTrue(self.paths.subscription_config.is_file())
         store.return_value.save.assert_called_once()
 
+    def test_cached_node_list_and_selected_node_survive_backend_recreation(self):
+        node = {"name": "node-one", "type": "socks5", "server": "127.0.0.1", "port": 1080}
+        result = SubscriptionResult(
+            profile={"proxies": [node]}, nodes=(node,), hostname="cached",
+            redacted_id="cached", content_type="application/yaml",
+            used_mihomo_suffix=False, hwid_active=False,
+        )
+        self.component._save_subscription_cache(result)
+        self.component._subscription_result = result
+
+        self.assertEqual(self.component.provider_nodes()[0]["name"], "node-one")
+        self.assertTrue(self.component.select_node("node-one"))
+
+        recreated = MihomoVPNComponent(_Config(), paths=self.paths)
+        self.assertEqual(recreated.provider_nodes()[0]["name"], "node-one")
+        self.assertEqual(recreated._last_good_node, "node-one")
+
+    def test_dpapi_secret_store_never_writes_subscription_url_in_plaintext(self):
+        import base64
+        from src.mihomo_config import SecretStore
+
+        secret_url = "https://provider.invalid/subscription-secret"
+
+        def fake_dpapi(data: bytes, *, decrypt: bool) -> bytes:
+            if decrypt:
+                assert data.startswith(b"protected:")
+                return base64.b64decode(data[len(b"protected:"):])
+            return b"protected:" + base64.b64encode(data)
+
+        with patch("src.mihomo_config._dpapi", side_effect=fake_dpapi) as dpapi:
+            store = SecretStore(self.paths.secrets)
+            store.save({"subscription_url": secret_url, "controller_secret": "random"})
+            protected = self.paths.secrets.read_bytes()
+            self.assertNotIn(secret_url.encode(), protected)
+            self.assertEqual(store.load()["subscription_url"], secret_url)
+        self.assertEqual([call.kwargs["decrypt"] for call in dpapi.call_args_list], [False, True])
+
 
 class MihomoConfigTests(unittest.TestCase):
     def test_rejects_non_https_subscription(self):

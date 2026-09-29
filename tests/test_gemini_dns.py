@@ -159,16 +159,22 @@ def test_powershell_mutation_is_bound_to_guid_and_family(monkeypatch):
         backend.set_servers(adapter()["guid"], "ipv4", ["1.1.1.1'; exit"])
 
 
-def test_http_forbidden_is_not_reported_as_working():
-    # Exercise the actual dashboard worker, without a GUI or network request.
+def test_http_forbidden_only_marks_site_reachable_not_gemini_account():
+    # A 403 proves the endpoint answered, not that a Google account can use Gemini.
     from src.dashboard import Dashboard
     from unittest.mock import patch
+    from src.gemini_availability import GeminiNetworkStatus, RegionSupport
     fake = Mock(_gemini_probe_running=False)
-    with patch("src.dashboard.threading.Thread") as thread, patch("src.dashboard.requests.Session") as session:
-        session.return_value.__enter__.return_value.get.return_value.status_code = 403
+    fake.gemini_availability_client.check.return_value = GeminiNetworkStatus(
+        network_available=True, website_reachable=True, website_http_status=403,
+        account_status="UNKNOWN", region_supported=RegionSupport.UNKNOWN,
+    )
+    fake._format_gemini_availability = Dashboard._format_gemini_availability
+    with patch("src.dashboard.threading.Thread") as thread:
         Dashboard._check_gemini_now(fake)
         thread.call_args.kwargs["target"]()
-    assert fake.gemini_site_status == "Сайт вернул HTTP 403"
+    assert "сайт: ✓ (HTTP 403)" in fake.gemini_site_status
+    assert "Google Account: ? не проверен" in fake.gemini_site_status
 
 
 def test_elevation_launcher_collects_helper_result(tmp_path, monkeypatch):
