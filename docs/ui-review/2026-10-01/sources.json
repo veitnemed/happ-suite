@@ -1,0 +1,25 @@
+{
+  "captured": "2026-10-01",
+  "relay": {
+    "file": "relay-vpn-running.png",
+    "source": "Existing running Windows window, captured with computer-use",
+    "build": "Not confirmed; visibly older than checkout c4c61b0",
+    "subscription": "Masked in the original window"
+  },
+  "happ": [
+    {
+      "file": "happ-official-ipad-1.png",
+      "source": "https://is1-ssl.mzstatic.com/image/thumb/PurpleSource221/v4/44/3b/10/443b1045-fc51-c02f-a72a-82ac422ffd08/c9479acb-dd8a-45dd-ac44-1f6e854c7890_IMG_0715__U00281_U0029.PNG/552x414bb.png",
+      "platform": "iPad",
+      "publisher": "Flyfrog LLC",
+      "page": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
+    },
+    {
+      "file": "happ-official-ipad-2.png",
+      "source": "https://is1-ssl.mzstatic.com/image/thumb/PurpleSource221/v4/59/10/2a/59102a11-6b54-c561-38af-0d92e7c43ca4/de948950-0922-40ab-8525-5658188cec45_IMG_0711__U00281_U0029.PNG/552x414bb.png",
+      "platform": "iPad",
+      "publisher": "Flyfrog LLC",
+      "page": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
+    }
+  ]
+}

@@ -48,6 +48,7 @@ config.json
 *.bat
 !run.bat
 !scripts/*.bat
+!experiments/gemini-direct/run-trial.ps1
 
 # Python cache
 fix_ps1.py
