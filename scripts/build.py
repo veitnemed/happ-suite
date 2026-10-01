@@ -92,7 +92,7 @@ def build(dist_dir=None, work_dir=None, entry="tray", *, console=False):
         f"--manifest={manifest}",
         f"--icon={app_icon}",
         f"--paths={root_dir}",
-        f"--add-data={root_dir / 'src' / 'data'};data",
+        f"--add-data={root_dir / 'src' / 'data'};src/data",
         f"--distpath={dist_dir}",
         f"--workpath={work_dir}",
         f"--specpath={work_dir}",

@@ -51,6 +51,14 @@ def inspect_package_tree(root: Path, *, executable: str = "RelayStudio.exe") -> 
         raise FileNotFoundError("Package is missing config/default.json")
     _check_default_config(config)
 
+    if (root / "_internal" / "PySide6").is_dir():
+        region_file = root / "_internal" / "src" / "data" / "gemini_web_regions.json"
+        if not region_file.is_file():
+            raise FileNotFoundError("Package is missing the Gemini region snapshot")
+        region_data = json.loads(region_file.read_text(encoding="utf-8"))
+        if not region_data.get("source") or not region_data.get("checked_at"):
+            raise ValueError("Packaged Gemini region snapshot has no source metadata")
+
     for path in root.rglob("*"):
         if not path.is_file():
             continue

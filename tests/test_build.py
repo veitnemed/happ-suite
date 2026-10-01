@@ -14,6 +14,7 @@ def test_build_uses_package_aware_dashboard_entry(tmp_path, entry):
     def fake_pyinstaller(command, cwd, check):
         assert command[-1] == str(Path(__file__).resolve().parents[1] / "start_app.py")
         assert "--name=RelayStudio" in command
+        assert any(arg.startswith("--add-data=") and arg.endswith(";src/data") for arg in command)
         package = dist / "RelayStudio"
         package.mkdir(parents=True)
         (package / "RelayStudio.exe").write_bytes(b"mock executable")
