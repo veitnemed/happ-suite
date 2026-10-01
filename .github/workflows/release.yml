@@ -26,6 +26,14 @@ jobs:
       - name: Verify packaged application contents
         shell: pwsh
         run: '& "${{ runner.temp }}/dist/RelayStudio/RelayStudio.exe" --self-check'
+      - name: Verify packaged Qt window
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $app = Start-Process -FilePath "${{ runner.temp }}/dist/RelayStudio/RelayStudio.exe" -ArgumentList '--ui-preview', '--preview-quit-after', '1500' -WindowStyle Hidden -PassThru
+          if (-not $app.WaitForExit(30000)) { throw 'Qt preview did not exit' }
+          if ($app.ExitCode -ne 0) { throw 'Qt preview failed' }
       - name: Package release ZIP
         run: python scripts/package_release.py --source "${{ runner.temp }}/dist/RelayStudio" --output "${{ runner.temp }}/release"
       - name: Build Windows Setup
@@ -45,4 +53,4 @@ jobs:
           foreach ($asset in @($setup, $archive, $checksum)) {
             if (-not (Test-Path $asset)) { throw "Release asset is missing: $([IO.Path]::GetFileName($asset))" }
           }
-          gh release create $tag $setup $archive $checksum --title "Happ Suite $version" --notes "Windows x64 release. Includes the installer and portable ZIP. The package omits local configuration, subscription credentials, and user runtime data." --latest
+          gh release create $tag $setup $archive $checksum --title "Relay Studio $version" --notes-file RELEASE_NOTES.md --latest

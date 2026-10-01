@@ -119,6 +119,8 @@ def build(dist_dir=None, work_dir=None, entry="tray", *, console=False):
     package_icon = package_dir / "assets" / "relay-studio.ico"
     package_icon.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(app_icon, package_icon)
+    for name in ("LICENSE", "README.md"):
+        shutil.copyfile(root_dir / name, package_dir / name)
     shutil.copyfile(root_dir / "THIRD_PARTY_NOTICES.md", package_dir / "THIRD_PARTY_NOTICES.md")
     shutil.copytree(root_dir / "licenses", package_dir / "licenses", dirs_exist_ok=True)
     for distribution_name in ("PySide6", "PySide6_Essentials", "shiboken6", "Pillow",

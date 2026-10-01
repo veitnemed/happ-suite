@@ -85,6 +85,7 @@ def apply_dark_theme(app):
         QPushButton:disabled {{ color: {COLORS['subtle']}; background: #111820; border-color: #202B36; }}
         QPushButton.primaryButton {{ background: {COLORS['accent']}; color: {COLORS['accent_text']}; border-color: {COLORS['accent']}; }}
         QPushButton.primaryButton:hover {{ background: {COLORS['accent_hover']}; border-color: {COLORS['accent_hover']}; }}
+        QPushButton.primaryButton:disabled {{ background: #111820; color: {COLORS['subtle']}; border-color: #202B36; }}
         QPushButton.dangerButton {{ color: {COLORS['error']}; }}
         QPushButton.navButton {{ text-align: left; border: 0; background: transparent; min-height: 44px; padding: 0 12px; color: {COLORS['muted']}; }}
         QPushButton.navButton:hover {{ background: {COLORS['surface_alt']}; color: {COLORS['text']}; }}

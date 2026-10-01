@@ -100,6 +100,14 @@ def test_loading_disables_mutating_actions(window):
     assert not widget.vpn_button.isEnabled()
 
 
+def test_disabled_primary_button_looks_disabled(window, app):
+    widget, _ = window
+    widget.apply.setEnabled(False)
+    app.processEvents()
+    image = widget.apply.grab().toImage()
+    assert image.pixelColor(5, image.height() // 2).name().upper() == "#111820"
+
+
 def test_empty_subscription_keeps_editor_and_no_fake_server(window):
     widget, controller = window
     widget.render(dict(controller.snapshot, nodes=[]))
