@@ -17,6 +17,7 @@ import yaml
 
 from .mihomo_config import _atomic_write, validate_subscription_url
 from .vpn_backend import ProviderFormatError, SubscriptionError
+from . import __version__
 
 logger = logging.getLogger("happ_suite.subscription")
 
@@ -68,7 +69,7 @@ def load_or_create_hwid(directory: Path) -> str:
 class SubscriptionClient:
     """Fetch a subscription with Mihomo identity and return validated YAML."""
 
-    USER_AGENT = "mihomo/HappSuite-2.3.0"
+    USER_AGENT = f"mihomo/HappSuite-{__version__}"
     ACCEPT = "application/yaml, text/yaml, */*"
     MAX_BYTES = 8 * 1024 * 1024
     MAX_REDIRECTS = 5

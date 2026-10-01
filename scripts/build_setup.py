@@ -38,12 +38,14 @@ def find_iscc(explicit: Path | None = None) -> Path:
     if found:
         return Path(found)
     for candidate in (
+        Path("C:/Program Files/Inno Setup 7/ISCC.exe"),
+        Path("C:/Program Files (x86)/Inno Setup 7/ISCC.exe"),
         Path("C:/Program Files (x86)/Inno Setup 6/ISCC.exe"),
         Path("C:/Program Files/Inno Setup 6/ISCC.exe"),
     ):
         if candidate.is_file():
             return candidate
-    raise FileNotFoundError("Install Inno Setup 6 to build the Windows Setup")
+    raise FileNotFoundError("Install Inno Setup 6 or 7 to build the Windows Setup")
 
 
 def build_setup(source: Path = DEFAULT_SOURCE, output: Path = DEFAULT_OUTPUT,

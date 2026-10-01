@@ -1,11 +1,13 @@
 """Build a windowless Relay Studio directory with an external default config."""
 
 import argparse
+import os
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+from importlib import metadata
 
 
 PRIVATE_CONFIG_FIELDS = {
@@ -20,6 +22,36 @@ PRIVATE_CONFIG_FIELDS = {
 }
 
 
+def _exclude_windows_icu(package_dir):
+    """Qt's Windows ICU API must not be shadowed by an ICU found on PATH.
+
+    PyInstaller can collect e.g. Git's ICU 78 as icuuc.dll. Its versioned
+    exports are incompatible with the unversioned Windows ICU imports used
+    by the official PySide6 wheel. Inspect both APIs before excluding it.
+    """
+    internal = Path(package_dir) / "_internal"
+    qt_core = internal / "PySide6" / "Qt6Core.dll"
+    bundled = internal / "icuuc.dll"
+    if not qt_core.is_file() or not bundled.is_file():
+        return
+    import pefile
+
+    with pefile.PE(str(qt_core)) as binary:
+        expected = {symbol.name for descriptor in binary.DIRECTORY_ENTRY_IMPORT
+                    if descriptor.dll.lower() == b"icuuc.dll"
+                    for symbol in descriptor.imports if symbol.name}
+    # A custom Qt build using a versioned ICU has a different deployment contract.
+    if b"ucnv_open" not in expected:
+        return
+    system = Path(os.environ.get("WINDIR", "C:/Windows")) / "System32" / "icuuc.dll"
+    with pefile.PE(str(system)) as binary:
+        available = {symbol.name for symbol in binary.DIRECTORY_ENTRY_EXPORT.symbols}
+    if not expected <= available:
+        raise RuntimeError("Windows ICU does not provide the API required by Qt")
+    bundled.unlink()
+    print("Qt uses Windows ICU; excluded a DLL collected from PATH.")
+
+
 def _check_public_config(value):
     """Keep credentials out of the distributable default configuration."""
     if isinstance(value, dict):
@@ -32,7 +64,7 @@ def _check_public_config(value):
             _check_public_config(item)
 
 
-def build(dist_dir=None, work_dir=None, entry="tray"):
+def build(dist_dir=None, work_dir=None, entry="tray", *, console=False):
     root_dir = Path(__file__).resolve().parent.parent
     if entry not in {"tray", "start"}:
         raise ValueError("entry must be tray or start")
@@ -54,7 +86,7 @@ def build(dist_dir=None, work_dir=None, entry="tray"):
         "-m", "PyInstaller",
         f"--name={app_name}",
         "--onedir",
-        "--noconsole",
+        "--console" if console else "--noconsole",
         "--clean",
         "--noconfirm",
         f"--manifest={manifest}",
@@ -79,6 +111,7 @@ def build(dist_dir=None, work_dir=None, entry="tray"):
     exe_path = package_dir / f"{app_name}.exe"
     if not exe_path.is_file():
         raise FileNotFoundError(f"PyInstaller did not create {exe_path}")
+    _exclude_windows_icu(package_dir)
 
     package_config = package_dir / "config" / "default.json"
     package_config.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +119,21 @@ def build(dist_dir=None, work_dir=None, entry="tray"):
     package_icon = package_dir / "assets" / "relay-studio.ico"
     package_icon.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(app_icon, package_icon)
+    shutil.copyfile(root_dir / "THIRD_PARTY_NOTICES.md", package_dir / "THIRD_PARTY_NOTICES.md")
+    shutil.copytree(root_dir / "licenses", package_dir / "licenses", dirs_exist_ok=True)
+    for distribution_name in ("PySide6", "PySide6_Essentials", "shiboken6", "Pillow",
+                              "requests", "PyYAML", "psutil", "pystray", "pywin32"):
+        try:
+            distribution = metadata.distribution(distribution_name)
+        except metadata.PackageNotFoundError:
+            continue
+        for relative in distribution.files or ():
+            if any(part.lower() == "licenses" for part in relative.parts) or relative.name.lower().startswith(("license", "copying")):
+                source = Path(distribution.locate_file(relative))
+                if source.is_file():
+                    target = package_dir / "licenses" / "dependencies" / distribution_name / relative.name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
 
     print("\n" + "=" * 60)
     print(f"BUILD SUCCESSFUL: {exe_path}")
@@ -100,5 +148,6 @@ if __name__ == "__main__":
     parser.add_argument("--work-dir", type=Path, help="isolated PyInstaller work directory")
     parser.add_argument("--entry", choices=("tray", "start"), default="start",
                         help="windowed RelayStudio executable (tray is a legacy alias)")
+    parser.add_argument("--console", action="store_true", help="diagnostic build with console output")
     args = parser.parse_args()
-    build(args.dist_dir, args.work_dir, args.entry)
+    build(args.dist_dir, args.work_dir, args.entry, console=args.console)

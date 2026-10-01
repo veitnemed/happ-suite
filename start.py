@@ -58,7 +58,6 @@ def main() -> None:
         raise SystemExit(bootstrap_mihomo())
     if sys.platform != "win32":
         raise SystemExit("Relay Studio needs Windows")
-    _stop_old_suite()
     from src.start import main as start_main
     start_main()
 

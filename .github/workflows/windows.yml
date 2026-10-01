@@ -25,6 +25,14 @@ jobs:
       - name: Smoke test packaged CLI
         shell: pwsh
         run: '& "${{ runner.temp }}/dist/RelayStudio/RelayStudio.exe" --self-check'
+      - name: Smoke test packaged Qt interface
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $app = Start-Process -FilePath "${{ runner.temp }}/dist/RelayStudio/RelayStudio.exe" -ArgumentList '--ui-preview', '--preview-quit-after', '1500' -WindowStyle Hidden -PassThru
+          if (-not $app.WaitForExit(30000)) { throw 'Qt preview did not exit' }
+          if ($app.ExitCode -ne 0) { throw 'Qt preview failed' }
       - name: Install Inno Setup compiler
         shell: pwsh
         run: choco install innosetup --yes --no-progress

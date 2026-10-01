@@ -11,7 +11,7 @@ VALUE_NAME = "HappSuite"
 
 def _command() -> str:
     if getattr(sys, "frozen", False):
-        if Path(sys.executable).name.lower() != "start.exe":
+        if Path(sys.executable).name.lower() not in {"start.exe", "relaystudio.exe"}:
             raise RuntimeError("Unexpected packaged executable")
         return f'"{Path(sys.executable).resolve()}" --background'
     launcher = Path(__file__).resolve().parent.parent / "start.pyw"

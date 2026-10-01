@@ -23,6 +23,8 @@ def test_build_uses_package_aware_dashboard_entry(tmp_path, entry):
 
     assert executable == dist / "RelayStudio" / "RelayStudio.exe"
     assert (dist / "RelayStudio" / "config" / "default.json").is_file()
+    assert (dist / "RelayStudio" / "THIRD_PARTY_NOTICES.md").is_file()
+    assert (dist / "RelayStudio" / "licenses" / "LGPL-3.0-only.txt").is_file()
 
 
 def test_build_rejects_unknown_entry(tmp_path):

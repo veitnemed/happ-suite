@@ -462,6 +462,16 @@ class TrayApp:
 
     # ── Toggle helpers ────────────────────────────────────────────────────────
 
+    def request_toggle_vpn(self, *, best_foreign=False):
+        """Shared window/tray command preserving elevation and ownership guards."""
+        self._schedule_toggle_happ(best_foreign=best_foreign)
+
+    def request_toggle_antigravity(self):
+        self._schedule_toggle_ag()
+
+    def set_shortcut(self, component, choice):
+        self._set_shortcut(component, choice)
+
     def _schedule_toggle_happ(self, *, best_foreign: bool = False):
         """Schedule the selected VPN backend in a background thread."""
         component = self.orchestrator.happ

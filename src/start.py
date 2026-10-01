@@ -7,19 +7,16 @@ import os
 from pathlib import Path
 import sys
 import threading
-import tkinter as tk
 
 try:
     from .app_config import Config
     from .core import Orchestrator
-    from .dashboard import Dashboard
     from .health import HealthMonitor
     from .main import _single_instance_handle, _release_single_instance
     from .tray import TrayApp
 except ImportError:
     from app_config import Config
     from core import Orchestrator
-    from dashboard import Dashboard
     from health import HealthMonitor
     from main import _single_instance_handle, _release_single_instance
     from tray import TrayApp
@@ -31,7 +28,7 @@ WAIT_OBJECT_0 = 0
 
 
 def enable_high_dpi_awareness():
-    """Opt into native per-monitor rendering before creating any Tk windows."""
+    """Opt into native per-monitor rendering before creating windows."""
     if os.name != "nt":
         return
     try:
@@ -85,7 +82,17 @@ def main(argv=None):
     parser.add_argument("--best-foreign", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--gemini-dns-helper", choices=("enable", "disable"), help=argparse.SUPPRESS)
     parser.add_argument("--dns-result", help=argparse.SUPPRESS)
+    parser.add_argument("--ui-preview", action="store_true", help="show offline Qt UI without tray or network commands")
+    parser.add_argument("--preview-page", default="vpn", choices=("vpn", "google", "ag", "settings"), help=argparse.SUPPRESS)
+    parser.add_argument("--preview-screenshot", help=argparse.SUPPRESS)
+    parser.add_argument("--preview-quit-after", type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.ui_preview:
+        from .ui_qt.preview import main as preview_main
+        preview_args = ["--page", args.preview_page, "--quit-after", str(args.preview_quit_after)]
+        if args.preview_screenshot:
+            preview_args += ["--screenshot", args.preview_screenshot]
+        return preview_main(preview_args)
     if args.self_check:
         if not getattr(sys, "frozen", False):
             parser.error("--self-check is available only in the packaged application")
@@ -124,51 +131,64 @@ def main(argv=None):
     tray = None
     try:
         show_event = _create_show_event()
-        root = tk.Tk()
-        if args.background:
-            root.withdraw()
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication
+        from .ui_qt.controller import Controller
+        from .ui_qt.main_window import MainWindow
+        from .ui_qt.theme import apply_dark_theme
+
+        app = QApplication.instance() or QApplication([sys.argv[0]])
+        app.setApplicationName("Relay Studio")
+        app.setQuitOnLastWindowClosed(False)
+        apply_dark_theme(app)
         config = Config()
         orchestrator = Orchestrator(config)
-        if args.elevated_vpn and config.vpn_backend == "mihomo":
-            logging.getLogger("happ_suite.start").info("Elevated restart requested the Mihomo connection")
-            if not orchestrator._start_happ_only():
-                logging.getLogger("happ_suite.start").error("Mihomo did not reach a verified connected state")
-        elif args.elevated_vpn_stop and config.vpn_backend == "mihomo":
-            logging.getLogger("happ_suite.start").info("Elevated restart requested the Mihomo disconnection")
-            if not orchestrator._stop_happ_only():
-                logging.getLogger("happ_suite.start").error("Mihomo stop or route recovery was not verified")
         health = HealthMonitor(orchestrator, config)
 
-        def show_window():
-            root.after(0, lambda: (root.deiconify(), root.lift()))
-
-        def exit_window():
-            root.after(0, root.destroy)
-
-        tray = TrayApp(orchestrator, config, health, on_open_dashboard=show_window,
-                       on_exit=exit_window)
-        dashboard = Dashboard(root, tray, config)
-        tray.on_toggle_dns = lambda: root.after(0, dashboard._toggle_gemini_dns)
-        if args.best_foreign and orchestrator.vpn.read_status(with_external_probe=False).connected:
-            root.after(500, dashboard._choose_best_vpn_node)
+        tray = TrayApp(orchestrator, config, health)
+        controller = Controller(tray, config)
+        root = MainWindow(controller)
+        controller.show_requested.connect(root.show_window)
+        controller.quit_requested.connect(app.quit)
+        tray.on_open_dashboard = controller.show_requested.emit
+        tray.on_exit = controller.quit_requested.emit
+        tray.on_toggle_dns = controller.dns_requested.emit
+        app.aboutToQuit.connect(controller.close)
+        controller.start()
+        if not args.background:
+            root.show()
+        if (args.elevated_vpn or args.elevated_vpn_stop) and config.vpn_backend == "mihomo":
+            def elevated_action():
+                with tray._action_lock:
+                    ok = (orchestrator._start_happ_only() if args.elevated_vpn
+                          else orchestrator._stop_happ_only())
+                    if not ok:
+                        from .vpn_backend import NetworkUnavailableError
+                        raise NetworkUnavailableError(orchestrator.vpn.last_error or "Операция VPN не подтверждена")
+                    health.start()
+                if args.best_foreign and args.elevated_vpn:
+                    controller.best_requested.emit()
+            QTimer.singleShot(0, lambda: controller._run("elevated", elevated_action))
+        elif args.best_foreign:
+            QTimer.singleShot(500, controller.choose_best)
 
         def run_tray():
             try:
                 tray.run()
             except Exception:
                 logging.getLogger("happ_suite.start").exception("Tray failed")
-                dashboard.set_message("Трей не запустился: см. журнал")
+                controller.message.emit("Трей не запустился: см. журнал")
 
         threading.Thread(target=run_tray, name="HappSuiteTray", daemon=True).start()
 
         def check_show_request():
             if ctypes.windll.kernel32.WaitForSingleObject(ctypes.c_void_p(show_event), 0) == WAIT_OBJECT_0:
-                root.deiconify()
-                root.lift()
-            root.after(250, check_show_request)
+                root.show_window()
 
-        root.after(250, check_show_request)
-        root.mainloop()
+        show_timer = QTimer(root)
+        show_timer.timeout.connect(check_show_request)
+        show_timer.start(250)
+        app.exec()
     finally:
         if tray is not None:
             try:

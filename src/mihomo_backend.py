@@ -102,9 +102,18 @@ class MihomoVPNComponent(Component):
             raise SubscriptionError("Добавьте HTTPS-ссылку на совместимую подписку Mihomo/Clash")
         return url
 
+    @property
+    def preferred_node(self) -> str | None:
+        """Persisted selection, not a claim about the currently verified route."""
+        return self._last_good_node
+
     def saved_subscription_url(self) -> str:
         """Return the locally protected URL for the dashboard field."""
         return SecretStore(self.paths.secrets).load().get("subscription_url", "")
+
+    def active_node(self) -> str | None:
+        """Read the controller selection without conflating it with preference."""
+        return self._api.proxies().get("VPN", {}).get("now") if self._api else None
 
     def _load_last_good_node(self) -> str | None:
         try:
